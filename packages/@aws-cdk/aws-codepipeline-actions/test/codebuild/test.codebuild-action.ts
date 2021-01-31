@@ -1,13 +1,14 @@
-import { expect, haveResourceLike } from "@aws-cdk/assert";
-import codebuild = require('@aws-cdk/aws-codebuild');
-import codecommit = require('@aws-cdk/aws-codecommit');
-import codepipeline = require('@aws-cdk/aws-codepipeline');
-import s3 = require('@aws-cdk/aws-s3');
-import { App, Stack } from '@aws-cdk/core';
+import { expect, haveResourceLike } from '@aws-cdk/assert';
+import * as codebuild from '@aws-cdk/aws-codebuild';
+import * as codecommit from '@aws-cdk/aws-codecommit';
+import * as codepipeline from '@aws-cdk/aws-codepipeline';
+import * as s3 from '@aws-cdk/aws-s3';
+import * as sns from '@aws-cdk/aws-sns';
+import { App, SecretValue, Stack } from '@aws-cdk/core';
 import { Test } from 'nodeunit';
-import cpactions = require('../../lib');
+import * as cpactions from '../../lib';
 
-// tslint:disable:object-literal-key-quotes
+/* eslint-disable quote-props */
 
 export = {
   'CodeBuild action': {
@@ -102,17 +103,17 @@ export = {
       });
 
       expect(stack).to(haveResourceLike('AWS::CodePipeline::Pipeline', {
-        "Stages": [
+        'Stages': [
           {
-            "Name": "Source",
+            'Name': 'Source',
           },
           {
-            "Name": "Build",
-            "Actions": [
+            'Name': 'Build',
+            'Actions': [
               {
-                "Name": "CodeBuild",
-                "Configuration": {
-                  "ProjectName": "codeBuildProjectNameInAnotherAccount",
+                'Name': 'CodeBuild',
+                'Configuration': {
+                  'ProjectName': 'codeBuildProjectNameInAnotherAccount',
                 },
               },
             ],
@@ -121,6 +122,219 @@ export = {
       }));
 
       test.done();
+    },
+
+    'exposes variables for other actions to consume'(test: Test) {
+      const stack = new Stack();
+
+      const sourceOutput = new codepipeline.Artifact();
+      const codeBuildAction = new cpactions.CodeBuildAction({
+        actionName: 'CodeBuild',
+        input: sourceOutput,
+        project: new codebuild.PipelineProject(stack, 'CodeBuild', {
+          buildSpec: codebuild.BuildSpec.fromObject({
+            version: '0.2',
+            env: {
+              'exported-variables': [
+                'SomeVar',
+              ],
+            },
+            phases: {
+              build: {
+                commands: [
+                  'export SomeVar="Some Value"',
+                ],
+              },
+            },
+          }),
+        }),
+      });
+      new codepipeline.Pipeline(stack, 'Pipeline', {
+        stages: [
+          {
+            stageName: 'Source',
+            actions: [
+              new cpactions.S3SourceAction({
+                actionName: 'S3_Source',
+                bucket: s3.Bucket.fromBucketName(stack, 'Bucket', 'bucket'),
+                bucketKey: 'key',
+                output: sourceOutput,
+              }),
+            ],
+          },
+          {
+            stageName: 'Build',
+            actions: [
+              codeBuildAction,
+              new cpactions.ManualApprovalAction({
+                actionName: 'Approve',
+                additionalInformation: codeBuildAction.variable('SomeVar'),
+                notificationTopic: sns.Topic.fromTopicArn(stack, 'Topic', 'arn:aws:sns:us-east-1:123456789012:mytopic'),
+                runOrder: 2,
+              }),
+            ],
+          },
+        ],
+      });
+
+      expect(stack).to(haveResourceLike('AWS::CodePipeline::Pipeline', {
+        'Stages': [
+          {
+            'Name': 'Source',
+          },
+          {
+            'Name': 'Build',
+            'Actions': [
+              {
+                'Name': 'CodeBuild',
+                'Namespace': 'Build_CodeBuild_NS',
+              },
+              {
+                'Name': 'Approve',
+                'Configuration': {
+                  'CustomData': '#{Build_CodeBuild_NS.SomeVar}',
+                },
+              },
+            ],
+          },
+        ],
+      }));
+
+      test.done();
+    },
+
+    'sets the BatchEnabled configuration'(test: Test) {
+      const stack = new Stack();
+
+      const codeBuildProject = new codebuild.PipelineProject(stack, 'CodeBuild');
+
+      const sourceOutput = new codepipeline.Artifact();
+      new codepipeline.Pipeline(stack, 'Pipeline', {
+        stages: [
+          {
+            stageName: 'Source',
+            actions: [
+              new cpactions.S3SourceAction({
+                actionName: 'S3_Source',
+                bucket: new s3.Bucket(stack, 'Bucket'),
+                bucketKey: 'key',
+                output: sourceOutput,
+              }),
+            ],
+          },
+          {
+            stageName: 'Build',
+            actions: [
+              new cpactions.CodeBuildAction({
+                actionName: 'CodeBuild',
+                input: sourceOutput,
+                project: codeBuildProject,
+                executeBatchBuild: true,
+              }),
+            ],
+          },
+        ],
+      });
+
+      expect(stack).to(haveResourceLike('AWS::CodePipeline::Pipeline', {
+        'Stages': [
+          {
+            'Name': 'Source',
+          },
+          {
+            'Name': 'Build',
+            'Actions': [
+              {
+                'Name': 'CodeBuild',
+                'Configuration': {
+                  'BatchEnabled': 'true',
+                },
+              },
+            ],
+          },
+        ],
+      }));
+
+      test.done();
+    },
+
+    'environment variables': {
+      'should fail by default when added to a Pipeline while using a secret value in a plaintext variable'(test: Test) {
+        const stack = new Stack();
+
+        const sourceOutput = new codepipeline.Artifact();
+        const pipeline = new codepipeline.Pipeline(stack, 'Pipeline', {
+          stages: [
+            {
+              stageName: 'Source',
+              actions: [new cpactions.CodeCommitSourceAction({
+                actionName: 'source',
+                repository: new codecommit.Repository(stack, 'CodeCommitRepo', {
+                  repositoryName: 'my-repo',
+                }),
+                output: sourceOutput,
+              })],
+            },
+          ],
+        });
+
+        const buildStage = pipeline.addStage({
+          stageName: 'Build',
+        });
+        const codeBuildProject = new codebuild.PipelineProject(stack, 'CodeBuild');
+        const buildAction = new cpactions.CodeBuildAction({
+          actionName: 'Build',
+          project: codeBuildProject,
+          input: sourceOutput,
+          environmentVariables: {
+            'X': {
+              value: SecretValue.secretsManager('my-secret'),
+            },
+          },
+        });
+
+        test.throws(() => {
+          buildStage.addAction(buildAction);
+        }, /Plaintext environment variable 'X' contains a secret value!/);
+
+        test.done();
+      },
+
+      "should allow opting out of the 'secret value in a plaintext variable' validation"(test: Test) {
+        const stack = new Stack();
+
+        const sourceOutput = new codepipeline.Artifact();
+        new codepipeline.Pipeline(stack, 'Pipeline', {
+          stages: [
+            {
+              stageName: 'Source',
+              actions: [new cpactions.CodeCommitSourceAction({
+                actionName: 'source',
+                repository: new codecommit.Repository(stack, 'CodeCommitRepo', {
+                  repositoryName: 'my-repo',
+                }),
+                output: sourceOutput,
+              })],
+            },
+            {
+              stageName: 'Build',
+              actions: [new cpactions.CodeBuildAction({
+                actionName: 'build',
+                project: new codebuild.PipelineProject(stack, 'CodeBuild'),
+                input: sourceOutput,
+                environmentVariables: {
+                  'X': {
+                    value: SecretValue.secretsManager('my-secret'),
+                  },
+                },
+                checkSecretsInPlainTextEnvVariables: false,
+              })],
+            },
+          ],
+        });
+
+        test.done();
+      },
     },
   },
 };

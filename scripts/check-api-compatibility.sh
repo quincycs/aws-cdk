@@ -13,7 +13,9 @@ package_name() {
 #
 # Doesn't use 'npm view' as that is slow. Direct curl'ing npmjs is better
 package_exists_on_npm() {
-    curl -I 2>/dev/null https://registry.npmjs.org/$1 | head -n 1 | grep 200 >/dev/null
+    pkg=$1
+    ver=$2 # optional
+    curl -I 2>/dev/null https://registry.npmjs.org/$pkg/$ver | head -n 1 | grep 200 >/dev/null
 }
 
 
@@ -47,30 +49,41 @@ export -f package_name
 export -f package_exists_on_npm
 export -f dirs_to_existing_names
 
-
 if ! ${SKIP_DOWNLOAD:-false}; then
     echo "Filtering on existing packages on NPM..." >&2
     # In parallel
     existing_names=$(echo "$jsii_package_dirs" | xargs -n1 -P4 -I {} bash -c 'dirs_to_existing_names "$@"' _ {})
     echo " Done." >&2
 
+    echo "Determining baseline version..." >&2
+    version=$(node -p 'require("./scripts/resolve-version.js").version')
+    disttag=$(node -p 'require("./scripts/resolve-version.js").npmDistTag')
+    echo "  Current version is $version." >&2
+
+    if ! package_exists_on_npm aws-cdk $version; then
+      echo "  Version $version does not exist in npm. Falling back to resolved dist tag '$disttag'" >&2
+      version=$disttag
+    fi
+
+    echo "Using version '$version' as the baseline..."
+    existing_names=$(echo "$existing_names" | sed -e "s/$/@$version/")
+
     rm -rf $tmpdir
     mkdir -p $tmpdir
 
     echo "Installing from NPM..." >&2
-    (cd $tmpdir && npm install --prefix $tmpdir $existing_names)
+    # use npm7 to automatically install peer dependencies
+    (cd $tmpdir && npx npm@^7.0.0 install --prefix $tmpdir $existing_names)
 fi
 
 #----------------------------------------------------------------------
-
-# get the current version from Lerna
-current_version=$(npx lerna ls -pl | head -n 1 | cut -d ':' -f 3)
 
 echo "Checking compatibility..." >&2
 success=true
 for dir in $jsii_package_dirs; do
     name=$(package_name "$dir")
     if [[ ! -d $tmpdir/node_modules/$name ]]; then continue; fi
+    if [[ ! -f $tmpdir/node_modules/$name/.jsii ]]; then continue; fi
     echo -n "$name... "
     if npx jsii-diff \
         --keys \

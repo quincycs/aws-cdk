@@ -1,6 +1,9 @@
-import sns = require('@aws-cdk/aws-sns');
+/// !cdk-integ pragma:ignore-assets
+import * as sns from '@aws-cdk/aws-sns';
 import { App, Construct, Stack } from '@aws-cdk/core';
-import cfn = require('../lib');
+import * as cfn from '../lib';
+
+/* eslint-disable cdk/no-core-construct */
 
 class YourNestedStack extends cfn.NestedStack {
   constructor(scope: Construct, id: string) {

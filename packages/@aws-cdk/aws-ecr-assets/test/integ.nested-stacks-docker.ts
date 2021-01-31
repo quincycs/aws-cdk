@@ -1,15 +1,19 @@
-import cfn = require('@aws-cdk/aws-cloudformation');
-import { App, CfnOutput, Construct, Stack, StackProps } from '@aws-cdk/core';
-import path = require('path');
-import ecr_assets = require('../lib');
+import * as path from 'path';
+import * as iam from '@aws-cdk/aws-iam';
+import { App, CfnOutput, NestedStack, NestedStackProps, Stack, StackProps } from '@aws-cdk/core';
+import { Construct } from 'constructs';
+import * as ecr_assets from '../lib';
 
-class TheNestedStack extends cfn.NestedStack {
-  constructor(scope: Construct, id: string, props?: cfn.NestedStackProps) {
+class TheNestedStack extends NestedStack {
+  constructor(scope: Construct, id: string, props?: NestedStackProps) {
     super(scope, id, props);
 
     const asset = new ecr_assets.DockerImageAsset(this, 'my-image', {
-      directory: path.join(__dirname, 'demo-image')
+      directory: path.join(__dirname, 'demo-image'),
     });
+
+    const user = new iam.User(this, 'User');
+    asset.repository.grantPull(user);
 
     new CfnOutput(this, 'output', { value: asset.imageUri });
   }
@@ -23,6 +27,10 @@ class TheParentStack extends Stack {
   }
 }
 
-const app = new App();
+const app = new App({
+  context: {
+    '@aws-cdk/aws-ecr-assets:dockerIgnoreSupport': true,
+  },
+});
 new TheParentStack(app, 'nested-stacks-docker');
 app.synth();

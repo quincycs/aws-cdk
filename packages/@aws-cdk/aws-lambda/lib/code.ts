@@ -1,11 +1,20 @@
-import s3 = require('@aws-cdk/aws-s3');
-import s3_assets = require('@aws-cdk/aws-s3-assets');
-import cdk = require('@aws-cdk/core');
-import { CfnResource } from '@aws-cdk/core';
+import * as ecr from '@aws-cdk/aws-ecr';
+import * as ecr_assets from '@aws-cdk/aws-ecr-assets';
+import * as iam from '@aws-cdk/aws-iam';
+import * as s3 from '@aws-cdk/aws-s3';
+import * as s3_assets from '@aws-cdk/aws-s3-assets';
+import * as cdk from '@aws-cdk/core';
 
+// keep this import separate from other imports to reduce chance for merge conflicts with v2-main
+// eslint-disable-next-line no-duplicate-imports, import/order
+import { Construct } from '@aws-cdk/core';
+
+/**
+ * Represents the Lambda Handler Code.
+ */
 export abstract class Code {
   /**
-   * @returns `LambdaS3Code` associated with the specified S3 object.
+   * Lambda handler code as an S3 object.
    * @param bucket The S3 bucket
    * @param key The object key
    * @param objectVersion Optional S3 object version
@@ -15,6 +24,7 @@ export abstract class Code {
   }
 
   /**
+   * DEPRECATED
    * @deprecated use `fromBucket`
    */
   public static bucket(bucket: s3.IBucket, key: string, objectVersion?: string): S3Code {
@@ -22,6 +32,7 @@ export abstract class Code {
   }
 
   /**
+   * Inline code for Lambda handler
    * @returns `LambdaInlineCode` with inline code.
    * @param code The actual handler code (limited to 4KiB)
    */
@@ -30,6 +41,7 @@ export abstract class Code {
   }
 
   /**
+   * DEPRECATED
    * @deprecated use `fromInline`
    */
   public static inline(code: string): InlineCode {
@@ -37,7 +49,8 @@ export abstract class Code {
   }
 
   /**
-   * Loads the function code from a local disk asset.
+   * Loads the function code from a local disk path.
+   *
    * @param path Either a directory with the Lambda code bundle or a .zip file
    */
   public static fromAsset(path: string, options?: s3_assets.AssetOptions): AssetCode {
@@ -45,6 +58,7 @@ export abstract class Code {
   }
 
   /**
+   * DEPRECATED
    * @deprecated use `fromAsset`
    */
   public static asset(path: string): AssetCode {
@@ -62,10 +76,29 @@ export abstract class Code {
   }
 
   /**
+   * DEPRECATED
    * @deprecated use `fromCfnParameters`
    */
   public static cfnParameters(props?: CfnParametersCodeProps): CfnParametersCode {
     return this.fromCfnParameters(props);
+  }
+
+  /**
+   * Use an existing ECR image as the Lambda code.
+   * @param repository the ECR repository that the image is in
+   * @param props properties to further configure the selected image
+   */
+  public static fromEcrImage(repository: ecr.IRepository, props?: EcrImageCodeProps) {
+    return new EcrImageCode(repository, props);
+  }
+
+  /**
+   * Create an ECR image from the specified asset and bind it as the Lambda code.
+   * @param directory the directory from which the asset must be created
+   * @param props properties to further configure the selected image
+   */
+  public static fromAssetImage(directory: string, props: AssetImageCodeProps = {}) {
+    return new AssetImageCode(directory, props);
   }
 
   /**
@@ -83,28 +116,66 @@ export abstract class Code {
    * @param scope The binding scope. Don't be smart about trying to down-cast or
    * assume it's initialized. You may just use it as a construct scope.
    */
-  public abstract bind(scope: cdk.Construct): CodeConfig;
+  public abstract bind(scope: Construct): CodeConfig;
 
   /**
    * Called after the CFN function resource has been created to allow the code
    * class to bind to it. Specifically it's required to allow assets to add
    * metadata for tooling like SAM CLI to be able to find their origins.
    */
-  public bindToResource(_resource: CfnResource, _options?: ResourceBindOptions) {
+  public bindToResource(_resource: cdk.CfnResource, _options?: ResourceBindOptions) {
     return;
   }
 }
 
+/**
+ * Result of binding `Code` into a `Function`.
+ */
 export interface CodeConfig {
   /**
-   * The location of the code in S3 (mutually exclusive with `inlineCode`).
+   * The location of the code in S3 (mutually exclusive with `inlineCode` and `image`).
+   * @default - code is not an s3 location
    */
   readonly s3Location?: s3.Location;
 
   /**
-   * Inline code (mutually exclusive with `s3Location`).
+   * Inline code (mutually exclusive with `s3Location` and `image`).
+   * @default - code is not inline code
    */
   readonly inlineCode?: string;
+
+  /**
+   * Docker image configuration (mutually exclusive with `s3Location` and `inlineCode`).
+   * @default - code is not an ECR container image
+   */
+  readonly image?: CodeImageConfig;
+}
+
+/**
+ * Result of the bind when an ECR image is used.
+ */
+export interface CodeImageConfig {
+  /**
+   * URI to the Docker image.
+   */
+  readonly imageUri: string;
+
+  /**
+   * Specify or override the CMD on the specified Docker image or Dockerfile.
+   * This needs to be in the 'exec form', viz., `[ 'executable', 'param1', 'param2' ]`.
+   * @see https://docs.docker.com/engine/reference/builder/#cmd
+   * @default - use the CMD specified in the docker image or Dockerfile.
+   */
+  readonly cmd?: string[];
+
+  /**
+   * Specify or override the ENTRYPOINT on the specified Docker image or Dockerfile.
+   * An ENTRYPOINT allows you to configure a container that will run as an executable.
+   * This needs to be in the 'exec form', viz., `[ 'executable', 'param1', 'param2' ]`.
+   * @see https://docs.docker.com/engine/reference/builder/#entrypoint
+   * @default - use the ENTRYPOINT in the docker image or Dockerfile.
+   */
+  readonly entrypoint?: string[];
 }
 
 /**
@@ -124,13 +195,13 @@ export class S3Code extends Code {
     this.bucketName = bucket.bucketName;
   }
 
-  public bind(_scope: cdk.Construct): CodeConfig {
+  public bind(_scope: Construct): CodeConfig {
     return {
       s3Location: {
         bucketName: this.bucketName,
         objectKey: this.key,
-        objectVersion: this.objectVersion
-      }
+        objectVersion: this.objectVersion,
+      },
     };
   }
 }
@@ -145,17 +216,17 @@ export class InlineCode extends Code {
     super();
 
     if (code.length === 0) {
-      throw new Error(`Lambda inline code cannot be empty`);
+      throw new Error('Lambda inline code cannot be empty');
     }
 
     if (code.length > 4096) {
-      throw new Error("Lambda source is too large, must be <= 4096 but is " + code.length);
+      throw new Error('Lambda source is too large, must be <= 4096 but is ' + code.length);
     }
   }
 
-  public bind(_scope: cdk.Construct): CodeConfig {
+  public bind(_scope: Construct): CodeConfig {
     return {
-      inlineCode: this.code
+      inlineCode: this.code,
     };
   }
 }
@@ -174,13 +245,16 @@ export class AssetCode extends Code {
     super();
   }
 
-  public bind(scope: cdk.Construct): CodeConfig {
+  public bind(scope: Construct): CodeConfig {
     // If the same AssetCode is used multiple times, retain only the first instantiation.
     if (!this.asset) {
       this.asset = new s3_assets.Asset(scope, 'Code', {
         path: this.path,
-        ...this.options
+        ...this.options,
       });
+    } else if (cdk.Stack.of(this.asset) !== cdk.Stack.of(scope)) {
+      throw new Error(`Asset is already associated with another stack '${cdk.Stack.of(this.asset).stackName}'. ` +
+        'Create a new Code instance for every stack.');
     }
 
     if (!this.asset.isZipArchive) {
@@ -190,14 +264,14 @@ export class AssetCode extends Code {
     return {
       s3Location: {
         bucketName: this.asset.s3BucketName,
-        objectKey: this.asset.s3ObjectKey
-      }
+        objectKey: this.asset.s3ObjectKey,
+      },
     };
   }
 
-  public bindToResource(resource: CfnResource, options: ResourceBindOptions = { }) {
+  public bindToResource(resource: cdk.CfnResource, options: ResourceBindOptions = { }) {
     if (!this.asset) {
-      throw new Error(`bindToResource() must be called after bind()`);
+      throw new Error('bindToResource() must be called after bind()');
     }
 
     const resourceProperty = options.resourceProperty || 'Code';
@@ -257,7 +331,7 @@ export class CfnParametersCode extends Code {
     this._objectKeyParam = props.objectKeyParam;
   }
 
-  public bind(scope: cdk.Construct): CodeConfig {
+  public bind(scope: Construct): CodeConfig {
     if (!this._bucketNameParam) {
       this._bucketNameParam = new cdk.CfnParameter(scope, 'LambdaSourceBucketNameParameter', {
         type: 'String',
@@ -274,7 +348,7 @@ export class CfnParametersCode extends Code {
       s3Location: {
         bucketName: this._bucketNameParam.valueAsString,
         objectKey: this._objectKeyParam.valueAsString,
-      }
+      },
     };
   }
 
@@ -311,5 +385,106 @@ export class CfnParametersCode extends Code {
     } else {
       throw new Error('Pass CfnParametersCode to a Lambda Function before accessing the objectKeyParam property');
     }
+  }
+}
+
+/**
+ * Properties to initialize a new EcrImageCode
+ */
+export interface EcrImageCodeProps {
+  /**
+   * Specify or override the CMD on the specified Docker image or Dockerfile.
+   * This needs to be in the 'exec form', viz., `[ 'executable', 'param1', 'param2' ]`.
+   * @see https://docs.docker.com/engine/reference/builder/#cmd
+   * @default - use the CMD specified in the docker image or Dockerfile.
+   */
+  readonly cmd?: string[];
+
+  /**
+   * Specify or override the ENTRYPOINT on the specified Docker image or Dockerfile.
+   * An ENTRYPOINT allows you to configure a container that will run as an executable.
+   * This needs to be in the 'exec form', viz., `[ 'executable', 'param1', 'param2' ]`.
+   * @see https://docs.docker.com/engine/reference/builder/#entrypoint
+   * @default - use the ENTRYPOINT in the docker image or Dockerfile.
+   */
+  readonly entrypoint?: string[];
+
+  /**
+   * The image tag to use when pulling the image from ECR.
+   * @default 'latest'
+   */
+  readonly tag?: string;
+}
+
+/**
+ * Represents a Docker image in ECR that can be bound as Lambda Code.
+ */
+export class EcrImageCode extends Code {
+  public readonly isInline: boolean = false;
+
+  constructor(private readonly repository: ecr.IRepository, private readonly props: EcrImageCodeProps = {}) {
+    super();
+  }
+
+  public bind(_: Construct): CodeConfig {
+    this.repository.grantPull(new iam.ServicePrincipal('lambda.amazonaws.com'));
+
+    return {
+      image: {
+        imageUri: this.repository.repositoryUriForTag(this.props?.tag ?? 'latest'),
+        cmd: this.props.cmd,
+        entrypoint: this.props.entrypoint,
+      },
+    };
+  }
+}
+
+/**
+ * Properties to initialize a new AssetImage
+ */
+export interface AssetImageCodeProps extends ecr_assets.DockerImageAssetOptions {
+  /**
+   * Specify or override the CMD on the specified Docker image or Dockerfile.
+   * This needs to be in the 'exec form', viz., `[ 'executable', 'param1', 'param2' ]`.
+   * @see https://docs.docker.com/engine/reference/builder/#cmd
+   * @default - use the CMD specified in the docker image or Dockerfile.
+   */
+  readonly cmd?: string[];
+
+  /**
+   * Specify or override the ENTRYPOINT on the specified Docker image or Dockerfile.
+   * An ENTRYPOINT allows you to configure a container that will run as an executable.
+   * This needs to be in the 'exec form', viz., `[ 'executable', 'param1', 'param2' ]`.
+   * @see https://docs.docker.com/engine/reference/builder/#entrypoint
+   * @default - use the ENTRYPOINT in the docker image or Dockerfile.
+   */
+  readonly entrypoint?: string[];
+}
+
+/**
+ * Represents an ECR image that will be constructed from the specified asset and can be bound as Lambda code.
+ */
+export class AssetImageCode extends Code {
+  public readonly isInline: boolean = false;
+
+  constructor(private readonly directory: string, private readonly props: AssetImageCodeProps) {
+    super();
+  }
+
+  public bind(scope: Construct): CodeConfig {
+    const asset = new ecr_assets.DockerImageAsset(scope, 'AssetImage', {
+      directory: this.directory,
+      ...this.props,
+    });
+
+    asset.repository.grantPull(new iam.ServicePrincipal('lambda.amazonaws.com'));
+
+    return {
+      image: {
+        imageUri: asset.imageUri,
+        entrypoint: this.props.entrypoint,
+        cmd: this.props.cmd,
+      },
+    };
   }
 }

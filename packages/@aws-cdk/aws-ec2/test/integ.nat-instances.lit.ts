@@ -1,5 +1,5 @@
-import cdk = require('@aws-cdk/core');
-import ec2 = require('../lib');
+import * as cdk from '@aws-cdk/core';
+import * as ec2 from '../lib';
 
 class NatInstanceStack extends cdk.Stack {
   constructor(scope: cdk.App, id: string, props?: cdk.StackProps) {
@@ -8,7 +8,7 @@ class NatInstanceStack extends cdk.Stack {
     /// !show
     // Configure the `natGatewayProvider` when defining a Vpc
     const natGatewayProvider = ec2.NatProvider.instance({
-      instanceType: new ec2.InstanceType('t3.small')
+      instanceType: new ec2.InstanceType('t3.small'),
     });
 
     const vpc = new ec2.Vpc(this, 'MyVpc', {
@@ -29,6 +29,6 @@ new NatInstanceStack(app, 'aws-cdk-vpc-nat-instances', {
   env: {
     account: process.env.CDK_INTEG_ACCOUNT || process.env.CDK_DEFAULT_ACCOUNT,
     region: process.env.CDK_INTEG_REGION || process.env.CDK_DEFAULT_REGION,
-  }
+  },
 });
 app.synth();

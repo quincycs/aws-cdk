@@ -19,3 +19,11 @@ coverage
 *.tsbuildinfo
 
 tsconfig.json
+.eslintrc.js
+
+# exclude cdk artifacts
+**/cdk.out
+jest.config.js
+
+junit.xml
+test/

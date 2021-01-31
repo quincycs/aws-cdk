@@ -1,13 +1,5 @@
 {
   "Resources": {
-    "MyTopic86869434": {
-      "Type": "AWS::SNS::Topic",
-      "Properties": {
-        "DisplayName": "fooDisplayName",
-        "TopicName": "fooTopic",
-        "KmsMasterKeyId": { "Ref":"CustomKey1E6D0D07" }
-      }
-    },
     "CustomKey1E6D0D07": {
       "Type": "AWS::KMS::Key",
       "Properties": {
@@ -27,7 +19,9 @@
                 "kms:Delete*",
                 "kms:ScheduleKeyDeletion",
                 "kms:CancelKeyDeletion",
-                "kms:GenerateDataKey"
+                "kms:GenerateDataKey",
+                "kms:TagResource",
+                "kms:UntagResource"
               ],
               "Effect": "Allow",
               "Principal": {
@@ -56,6 +50,19 @@
       },
       "UpdateReplacePolicy": "Retain",
       "DeletionPolicy": "Retain"
+    },
+    "MyTopic86869434": {
+      "Type": "AWS::SNS::Topic",
+      "Properties": {
+        "DisplayName": "fooDisplayName",
+        "KmsMasterKeyId": {
+          "Fn::GetAtt": [
+            "CustomKey1E6D0D07",
+            "Arn"
+          ]
+        },
+        "TopicName": "fooTopic"
+      }
     }
   }
 }

@@ -1,12 +1,14 @@
-## Amazon ECS Construct Library
+# Amazon ECS Construct Library
 <!--BEGIN STABILITY BANNER-->
 
 ---
 
-![Stability: Stable](https://img.shields.io/badge/stability-Stable-success.svg?style=for-the-badge)
+![cfn-resources: Stable](https://img.shields.io/badge/cfn--resources-stable-success.svg?style=for-the-badge)
 
+![cdk-constructs: Stable](https://img.shields.io/badge/cdk--constructs-stable-success.svg?style=for-the-badge)
 
 ---
+
 <!--END STABILITY BANNER-->
 
 This package contains constructs for working with **Amazon Elastic Container
@@ -24,7 +26,7 @@ adds capacity to it,
 and instantiates the Amazon ECS Service with an automatic load balancer.
 
 ```ts
-import ecs = require('@aws-cdk/aws-ecs');
+import * as ecs from '@aws-cdk/aws-ecs';
 
 // Create an ECS cluster
 const cluster = new ecs.Cluster(this, 'Cluster', {
@@ -53,9 +55,9 @@ const ecsService = new ecs.Ec2Service(this, 'Service', {
 
 For a set of constructs defining common ECS architectural patterns, see the `@aws-cdk/aws-ecs-patterns` package.
 
-## AWS Fargate vs Amazon ECS
+## Launch Types: AWS Fargate vs Amazon EC2
 
-There are two sets of constructs in this library; one to run tasks on Amazon ECS and
+There are two sets of constructs in this library; one to run tasks on Amazon EC2 and
 one to run tasks on AWS Fargate.
 
 - Use the `Ec2TaskDefinition` and `Ec2Service` constructs to run tasks on Amazon EC2 instances running in your account.
@@ -129,6 +131,28 @@ cluster.addAutoScalingGroup(autoScalingGroup);
 
 If you omit the property `vpc`, the construct will create a new VPC with two AZs.
 
+
+### Bottlerocket
+
+[Bottlerocket](https://aws.amazon.com/bottlerocket/) is a Linux-based open source operating system that is
+purpose-built by AWS for running containers. You can launch Amazon ECS container instances with the Bottlerocket AMI.
+
+> **NOTICE**: The Bottlerocket AMI is in developer preview release for Amazon ECS and is subject to change.
+
+The following example will create a capacity with self-managed Amazon EC2 capacity of 2 `c5.large` Linux instances running with `Bottlerocket` AMI.
+
+Note that you must specify either a `machineImage` or `machineImageType`, at least one, not both.
+
+The following example adds Bottlerocket capacity to the cluster:
+
+```ts
+cluster.addCapacity('bottlerocket-asg', {
+  minCapacity: 2,
+  instanceType: new ec2.InstanceType('c5.large'),
+  machineImageType: ecs.MachineImageType.BOTTLEROCKET,
+});
+```
+
 ### Spot Instances
 
 To add spot instances into the cluster, you must specify the `spotPrice` in the `ecs.AddCapacityOptions` and optionally enable the `spotInstanceDraining` property.
@@ -143,6 +167,24 @@ cluster.addCapacity('AsgSpot', {
   spotPrice: '0.0735',
   // Enable the Automated Spot Draining support for Amazon ECS
   spotInstanceDraining: true,
+});
+```
+
+### SNS Topic Encryption
+
+When the `ecs.AddCapacityOptions` that you provide has a non-zero `taskDrainTime` (the default) then an SNS topic and Lambda are created to ensure that the
+cluster's instances have been properly drained of tasks before terminating. The SNS Topic is sent the instance-terminating lifecycle event from the AutoScalingGroup,
+and the Lambda acts on that event. If you wish to engage [server-side encryption](https://docs.aws.amazon.com/sns/latest/dg/sns-data-encryption.html) for this SNS Topic
+then you may do so by providing a KMS key for the `topicEncryptionKey` propery of `ecs.AddCapacityOptions`.
+
+```ts
+// Given
+const key = kms.Key(...);
+// Then, use that key to encrypt the lifecycle-event SNS Topic.
+cluster.addCapacity('ASGEncryptedSNS', {
+  instanceType: new ec2.InstanceType("t2.xlarge"),
+  desiredCapacity: 3,
+  topicEncryptionKey: key,
 });
 ```
 
@@ -167,6 +209,7 @@ const fargateTaskDefinition = new ecs.FargateTaskDefinition(this, 'TaskDef', {
   cpu: 256
 });
 ```
+
 To add containers to a task definition, call `addContainer()`:
 
 ```ts
@@ -200,6 +243,21 @@ container.addPortMappings({
 })
 ```
 
+To add data volumes to a task definition, call `addVolume()`:
+
+```ts
+const volume = ecs.Volume("Volume", {
+  // Use an Elastic FileSystem
+  name: "mydatavolume",
+  efsVolumeConfiguration: ecs.EfsVolumeConfiguration({
+    fileSystemId: "EFS"
+    // ... other options here ...
+  })
+});
+
+const container = fargateTaskDefinition.addVolume("mydatavolume");
+```
+
 To use a TaskDefinition that can be used with either Amazon EC2 or
 AWS Fargate launch types, use the `TaskDefinition` construct.
 
@@ -221,16 +279,18 @@ const taskDefinition = new ecs.TaskDefinition(this, 'TaskDef', {
 Images supply the software that runs inside the container. Images can be
 obtained from either DockerHub or from ECR repositories, or built directly from a local Dockerfile.
 
-* `ecs.ContainerImage.fromRegistry(imageName)`: use a public image.
-* `ecs.ContainerImage.fromRegistry(imageName, { credentials: mySecret })`: use a private image that requires credentials.
-* `ecs.ContainerImage.fromEcrRepository(repo, tag)`: use the given ECR repository as the image
+- `ecs.ContainerImage.fromRegistry(imageName)`: use a public image.
+- `ecs.ContainerImage.fromRegistry(imageName, { credentials: mySecret })`: use a private image that requires credentials.
+- `ecs.ContainerImage.fromEcrRepository(repo, tag)`: use the given ECR repository as the image
   to start. If no tag is provided, "latest" is assumed.
-* `ecs.ContainerImage.fromAsset('./image')`: build and upload an
+- `ecs.ContainerImage.fromAsset('./image')`: build and upload an
   image directly from a `Dockerfile` in your source directory.
+- `ecs.ContainerImage.fromDockerImageAsset(asset)`: uses an existing
+  `@aws-cdk/aws-ecr-assets.DockerImageAsset` as a container image.
 
 ### Environment variables
 
-To pass environment variables to the container, use the `environment` and `secrets` props.
+To pass environment variables to the container, you can use the `environment`, `environmentFiles`, and `secrets` props.
 
 ```ts
 taskDefinition.addContainer('container', {
@@ -239,14 +299,21 @@ taskDefinition.addContainer('container', {
   environment: { // clear text, not for sensitive data
     STAGE: 'prod',
   },
+  environmentFiles: [ // list of environment files hosted either on local disk or S3
+    ecs.EnvironmentFile.fromAsset('./demo-env-file.env'),
+    ecs.EnvironmentFile.fromBucket(s3Bucket, 'assets/demo-env-file.env'),
+  ],
   secrets: { // Retrieved from AWS Secrets Manager or AWS Systems Manager Parameter Store at container start-up.
     SECRET: ecs.Secret.fromSecretsManager(secret),
+    DB_PASSWORD: ecs.Secret.fromSecretsManager(dbSecret, 'password'), // Reference a specific JSON field, (requires platform version 1.4.0 or later for Fargate tasks)
     PARAMETER: ecs.Secret.fromSsmParameter(parameter),
   }
 });
 ```
 
-The task execution role is automatically granted read permissions on the secrets/parameters.
+The task execution role is automatically granted read permissions on the secrets/parameters. Support for environment
+files is restricted to the EC2 launch type for files hosted on S3. Further details provided in the AWS documentation
+about [specifying environment variables](https://docs.aws.amazon.com/AmazonECS/latest/developerguide/taskdef-envfiles.html).
 
 ## Service
 
@@ -265,12 +332,30 @@ const service = new ecs.FargateService(this, 'Service', {
 });
 ```
 
+`Services` by default will create a security group if not provided.
+If you'd like to specify which security groups to use you can override the `securityGroups` property.
+
+### Deployment circuit breaker and rollback
+
+Amazon ECS [deployment circuit breaker](https://aws.amazon.com/tw/blogs/containers/announcing-amazon-ecs-deployment-circuit-breaker/)
+automatically rolls back unhealthy service deployments without the need for manual intervention. Use `circuitBreaker` to enable
+deployment circuit breaker and optionally enable `rollback` for automatic rollback. See [Using the deployment circuit breaker](https://docs.aws.amazon.com/AmazonECS/latest/developerguide/deployment-type-ecs.html)
+for more details.
+
+```ts
+const service = new ecs.FargateService(stack, 'Service', {
+  cluster,
+  taskDefinition,
+  circuitBreaker: { rollback: true },
+});
+```
+
 ### Include an application/network load balancer
 
 `Services` are load balancing targets and can be added to a target group, which will be attached to an application/network load balancers:
 
 ```ts
-import elbv2 = require('@aws-cdk/aws-elasticloadbalancingv2');
+import * as elbv2 from '@aws-cdk/aws-elasticloadbalancingv2';
 
 const service = new ecs.FargateService(this, 'Service', { /* ... */ });
 
@@ -294,7 +379,7 @@ Note that in the example above, the default `service` only allows you to registe
 Alternatively, you can also create all load balancer targets to be registered in this service, add them to target groups, and attach target groups to listeners accordingly.
 
 ```ts
-import elbv2 = require('@aws-cdk/aws-elasticloadbalancingv2');
+import * as elbv2 from '@aws-cdk/aws-elasticloadbalancingv2';
 
 const service = new ecs.FargateService(this, 'Service', { /* ... */ });
 
@@ -302,11 +387,9 @@ const lb = new elbv2.ApplicationLoadBalancer(this, 'LB', { vpc, internetFacing: 
 const listener = lb.addListener('Listener', { port: 80 });
 service.registerLoadBalancerTargets(
   {
-    containerTarget: {
-      containerName: 'web',
-      containerPort: 80,
-    },
-    targetGroupId: 'ECS',
+    containerName: 'web',
+    containerPort: 80,
+    newTargetGroupId: 'ECS',
     listener: ecs.ListenerConfig.applicationListener(listener, {
       protocol: elbv2.ApplicationProtocol.HTTPS
     }),
@@ -330,10 +413,11 @@ See the [ecs/cross-stack-load-balancer example](https://github.com/aws-samples/a
 for the alternatives.
 
 ### Include a classic load balancer
+
 `Services` can also be directly attached to a classic load balancer as targets:
 
 ```ts
-import elb = require('@aws-cdk/aws-elasticloadbalancing');
+import * as elb from '@aws-cdk/aws-elasticloadbalancing';
 
 const service = new ecs.Ec2Service(this, 'Service', { /* ... */ });
 
@@ -345,7 +429,7 @@ lb.addTarget(service);
 Similarly, if you want to have more control over load balancer targeting:
 
 ```ts
-import elb = require('@aws-cdk/aws-elasticloadbalancing');
+import * as elb from '@aws-cdk/aws-elasticloadbalancing';
 
 const service = new ecs.Ec2Service(this, 'Service', { /* ... */ });
 
@@ -359,8 +443,8 @@ lb.addTarget(service.loadBalancerTarget{
 
 There are two higher-level constructs available which include a load balancer for you that can be found in the aws-ecs-patterns module:
 
-* `LoadBalancedFargateService`
-* `LoadBalancedEc2Service`
+- `LoadBalancedFargateService`
+- `LoadBalancedEc2Service`
 
 ## Task Auto-Scaling
 
@@ -420,7 +504,7 @@ To start an Amazon ECS task on an Amazon EC2-backed Cluster, instantiate an
 `@aws-cdk/aws-events-targets.EcsTask` instead of an `Ec2Service`:
 
 ```ts
-import targets = require('@aws-cdk/aws-events-targets');
+import * as targets from '@aws-cdk/aws-events-targets';
 
 // Create a Task Definition for the container to start
 const taskDefinition = new ecs.Ec2TaskDefinition(this, 'TaskDef');
@@ -461,6 +545,7 @@ Currently Supported Log Drivers:
 - json-file
 - splunk
 - syslog
+- awsfirelens
 
 ### awslogs Log Driver
 
@@ -470,7 +555,7 @@ const taskDefinition = new ecs.Ec2TaskDefinition(this, 'TaskDef');
 taskDefinition.addContainer('TheContainer', {
   image: ecs.ContainerImage.fromRegistry('example-image'),
   memoryLimitMiB: 256,
-  logging: new ecs.LogDrivers.awslogs({ streamPrefix: 'EventDemo' })
+  logging: ecs.LogDrivers.awsLogs({ streamPrefix: 'EventDemo' })
 });
 ```
 
@@ -482,7 +567,7 @@ const taskDefinition = new ecs.Ec2TaskDefinition(this, 'TaskDef');
 taskDefinition.addContainer('TheContainer', {
   image: ecs.ContainerImage.fromRegistry('example-image'),
   memoryLimitMiB: 256,
-  logging: new ecs.LogDrivers.fluentd()
+  logging: ecs.LogDrivers.fluentd()
 });
 ```
 
@@ -494,7 +579,7 @@ const taskDefinition = new ecs.Ec2TaskDefinition(this, 'TaskDef');
 taskDefinition.addContainer('TheContainer', {
   image: ecs.ContainerImage.fromRegistry('example-image'),
   memoryLimitMiB: 256,
-  logging: new ecs.LogDrivers.gelf()
+  logging: ecs.LogDrivers.gelf({ address: 'my-gelf-address' })
 });
 ```
 
@@ -506,7 +591,7 @@ const taskDefinition = new ecs.Ec2TaskDefinition(this, 'TaskDef');
 taskDefinition.addContainer('TheContainer', {
   image: ecs.ContainerImage.fromRegistry('example-image'),
   memoryLimitMiB: 256,
-  logging: new ecs.LogDrivers.journald()
+  logging: ecs.LogDrivers.journald()
 });
 ```
 
@@ -518,7 +603,7 @@ const taskDefinition = new ecs.Ec2TaskDefinition(this, 'TaskDef');
 taskDefinition.addContainer('TheContainer', {
   image: ecs.ContainerImage.fromRegistry('example-image'),
   memoryLimitMiB: 256,
-  logging: new ecs.LogDrivers.jsonFile()
+  logging: ecs.LogDrivers.jsonFile()
 });
 ```
 
@@ -530,7 +615,10 @@ const taskDefinition = new ecs.Ec2TaskDefinition(this, 'TaskDef');
 taskDefinition.addContainer('TheContainer', {
   image: ecs.ContainerImage.fromRegistry('example-image'),
   memoryLimitMiB: 256,
-  logging: new ecs.LogDrivers.splunk()
+  logging: ecs.LogDrivers.splunk({
+    token: cdk.SecretValue.secretsManager('my-splunk-token'),
+    url: 'my-splunk-url'
+  })
 });
 ```
 
@@ -542,7 +630,25 @@ const taskDefinition = new ecs.Ec2TaskDefinition(this, 'TaskDef');
 taskDefinition.addContainer('TheContainer', {
   image: ecs.ContainerImage.fromRegistry('example-image'),
   memoryLimitMiB: 256,
-  logging: new ecs.LogDrivers.syslog()
+  logging: ecs.LogDrivers.syslog()
+});
+```
+
+### firelens Log Driver
+
+```ts
+// Create a Task Definition for the container to start
+const taskDefinition = new ecs.Ec2TaskDefinition(this, 'TaskDef');
+taskDefinition.addContainer('TheContainer', {
+  image: ecs.ContainerImage.fromRegistry('example-image'),
+  memoryLimitMiB: 256,
+  logging: ecs.LogDrivers.firelens({
+    options: {
+        Name: 'firehose',
+        region: 'us-west-2',
+        delivery_stream: 'my-stream',
+    }
+  })
 });
 ```
 

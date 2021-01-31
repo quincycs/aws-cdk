@@ -1,5 +1,6 @@
-import { FargateService, FargateTaskDefinition } from '@aws-cdk/aws-ecs';
-import { Construct } from '@aws-cdk/core';
+import { ISecurityGroup, SubnetSelection } from '@aws-cdk/aws-ec2';
+import { FargatePlatformVersion, FargateService, FargateTaskDefinition } from '@aws-cdk/aws-ecs';
+import { Construct } from 'constructs';
 import { ApplicationLoadBalancedServiceBase, ApplicationLoadBalancedServiceBaseProps } from '../base/application-load-balanced-service-base';
 
 /**
@@ -64,6 +65,31 @@ export interface ApplicationLoadBalancedFargateServiceProps extends ApplicationL
    * @default false
    */
   readonly assignPublicIp?: boolean;
+
+  /**
+   * The subnets to associate with the service.
+   *
+   * @default - Public subnets if `assignPublicIp` is set, otherwise the first available one of Private, Isolated, Public, in that order.
+   */
+  readonly taskSubnets?: SubnetSelection;
+
+  /**
+   * The platform version on which to run your service.
+   *
+   * If one is not specified, the LATEST platform version is used by default. For more information, see
+   * [AWS Fargate Platform Versions](https://docs.aws.amazon.com/AmazonECS/latest/developerguide/platform_versions.html)
+   * in the Amazon Elastic Container Service Developer Guide.
+   *
+   * @default Latest
+   */
+  readonly platformVersion?: FargatePlatformVersion;
+
+  /**
+   * The security groups to associate with the service. If you do not specify a security group, the default security group for the VPC is used.
+   *
+   * @default - A new security group is created.
+   */
+  readonly securityGroups?: ISecurityGroup[];
 }
 
 /**
@@ -110,8 +136,8 @@ export class ApplicationLoadBalancedFargateService extends ApplicationLoadBalanc
       // Create log driver if logging is enabled
       const enableLogging = taskImageOptions.enableLogging !== undefined ? taskImageOptions.enableLogging : true;
       const logDriver = taskImageOptions.logDriver !== undefined
-                          ? taskImageOptions.logDriver : enableLogging
-                            ? this.createAWSLogDriver(this.node.id) : undefined;
+        ? taskImageOptions.logDriver : enableLogging
+          ? this.createAWSLogDriver(this.node.id) : undefined;
 
       const containerName = taskImageOptions.containerName !== undefined ? taskImageOptions.containerName : 'web';
       const container = this.taskDefinition.addContainer(containerName, {
@@ -127,7 +153,7 @@ export class ApplicationLoadBalancedFargateService extends ApplicationLoadBalanc
       throw new Error('You must specify one of: taskDefinition or image');
     }
 
-    this.service = new FargateService(this, "Service", {
+    this.service = new FargateService(this, 'Service', {
       cluster: this.cluster,
       desiredCount: this.desiredCount,
       taskDefinition: this.taskDefinition,
@@ -139,6 +165,10 @@ export class ApplicationLoadBalancedFargateService extends ApplicationLoadBalanc
       propagateTags: props.propagateTags,
       enableECSManagedTags: props.enableECSManagedTags,
       cloudMapOptions: props.cloudMapOptions,
+      platformVersion: props.platformVersion,
+      deploymentController: props.deploymentController,
+      securityGroups: props.securityGroups,
+      vpcSubnets: props.taskSubnets,
     });
     this.addServiceAsTarget(this.service);
   }

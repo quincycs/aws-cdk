@@ -1,13 +1,19 @@
-import SDK = require('aws-sdk');
-import AWS = require('aws-sdk-mock');
-import nock = require('nock');
-import sinon = require('sinon');
-import { AwsSdkCall } from '../../lib';
-import { flatten, handler } from '../../lib/aws-custom-resource/runtime';
+import * as SDK from 'aws-sdk';
+import * as AWS from 'aws-sdk-mock';
+import * as fs from 'fs-extra';
+import * as nock from 'nock';
+import * as sinon from 'sinon';
+import { AwsSdkCall, PhysicalResourceId } from '../../lib';
+import { flatten, handler, forceSdkInstallation } from '../../lib/aws-custom-resource/runtime';
 
-AWS.setSDK(require.resolve('aws-sdk'));
 
-console.log = jest.fn(); // tslint:disable-line no-console
+// This test performs an 'npm install' which may take longer than the default
+// 5s timeout
+jest.setTimeout(60_000);
+
+/* eslint-disable no-console */
+
+console.log = jest.fn();
 
 const eventCommon = {
   ServiceToken: 'token',
@@ -24,6 +30,10 @@ function createRequest(bodyPredicate: (body: AWSLambda.CloudFormationCustomResou
     .reply(200);
 }
 
+beforeEach(() => {
+  AWS.setSDK(require.resolve('aws-sdk'));
+});
+
 afterEach(() => {
   AWS.restore();
   nock.cleanAll();
@@ -34,13 +44,13 @@ test('create event with physical resource id path', async () => {
     Contents: [
       {
         Key: 'first-key',
-        ETag: 'first-key-etag'
+        ETag: 'first-key-etag',
       },
       {
         Key: 'second-key',
         ETag: 'second-key-etag',
-      }
-    ]
+      },
+    ],
   } as SDK.S3.ListObjectsOutput);
 
   AWS.mock('S3', 'listObjects', listObjectsFake);
@@ -54,23 +64,23 @@ test('create event with physical resource id path', async () => {
         service: 'S3',
         action: 'listObjects',
         parameters: {
-          Bucket: 'my-bucket'
+          Bucket: 'my-bucket',
         },
-        physicalResourceIdPath: 'Contents.1.ETag'
-      } as AwsSdkCall
-    }
+        physicalResourceId: PhysicalResourceId.fromResponse('Contents.1.ETag'),
+      } as AwsSdkCall,
+    },
   };
 
   const request = createRequest(body =>
     body.Status === 'SUCCESS' &&
     body.PhysicalResourceId === 'second-key-etag' &&
-    body.Data!['Contents.0.Key'] === 'first-key'
+    body.Data!['Contents.0.Key'] === 'first-key',
   );
 
   await handler(event, {} as AWSLambda.Context);
 
   sinon.assert.calledWith(listObjectsFake, {
-    Bucket: 'my-bucket'
+    Bucket: 'my-bucket',
   });
 
   expect(request.isDone()).toBeTruthy();
@@ -93,16 +103,16 @@ test('update event with physical resource id', async () => {
         action: 'publish',
         parameters: {
           Message: 'hello',
-          TopicArn: 'topicarn'
+          TopicArn: 'topicarn',
         },
-        physicalResourceId: 'topicarn'
-      } as AwsSdkCall
-    }
+        physicalResourceId: PhysicalResourceId.of('topicarn'),
+      } as AwsSdkCall,
+    },
   };
 
   const request = createRequest(body =>
     body.Status === 'SUCCESS' &&
-    body.PhysicalResourceId === 'topicarn'
+    body.PhysicalResourceId === 'topicarn',
   );
 
   await handler(event, {} as AWSLambda.Context);
@@ -125,22 +135,89 @@ test('delete event', async () => {
         service: 'S3',
         action: 'listObjects',
         parameters: {
-          Bucket: 'my-bucket'
+          Bucket: 'my-bucket',
         },
-        physicalResourceIdPath: 'Contents.1.ETag'
-      } as AwsSdkCall
-    }
+        physicalResourceId: PhysicalResourceId.fromResponse('Contents.1.ETag'),
+      } as AwsSdkCall,
+    },
   };
 
   const request = createRequest(body =>
     body.Status === 'SUCCESS' &&
     body.PhysicalResourceId === 'physicalResourceId' &&
-    Object.keys(body.Data!).length === 0
+    Object.keys(body.Data!).length === 0,
   );
 
   await handler(event, {} as AWSLambda.Context);
 
   sinon.assert.notCalled(listObjectsFake);
+
+  expect(request.isDone()).toBeTruthy();
+});
+
+test('delete event with Delete call and no physical resource id in call', async () => {
+  const deleteParameterFake = sinon.fake.resolves({});
+
+  AWS.mock('SSM', 'deleteParameter', deleteParameterFake);
+
+  const event: AWSLambda.CloudFormationCustomResourceDeleteEvent = {
+    ...eventCommon,
+    RequestType: 'Delete',
+    PhysicalResourceId: 'physicalResourceId',
+    ResourceProperties: {
+      ServiceToken: 'token',
+      Delete: {
+        service: 'SSM',
+        action: 'deleteParameter',
+        parameters: {
+          Name: 'my-param',
+        },
+      } as AwsSdkCall,
+    },
+  };
+
+  const request = createRequest(body =>
+    body.Status === 'SUCCESS' &&
+    body.PhysicalResourceId === 'physicalResourceId',
+  );
+
+  await handler(event, {} as AWSLambda.Context);
+
+  sinon.assert.calledWith(deleteParameterFake, {
+    Name: 'my-param',
+  });
+
+  expect(request.isDone()).toBeTruthy();
+});
+
+test('create event with Delete call only', async () => {
+  const deleteParameterFake = sinon.fake.resolves({});
+
+  AWS.mock('SSM', 'deleteParameter', deleteParameterFake);
+
+  const event: AWSLambda.CloudFormationCustomResourceCreateEvent = {
+    ...eventCommon,
+    RequestType: 'Create',
+    ResourceProperties: {
+      ServiceToken: 'token',
+      Delete: {
+        service: 'SSM',
+        action: 'deleteParameter',
+        parameters: {
+          Name: 'my-param',
+        },
+      } as AwsSdkCall,
+    },
+  };
+
+  const request = createRequest(body =>
+    body.Status === 'SUCCESS' &&
+    body.PhysicalResourceId === 'logicalResourceId',
+  );
+
+  await handler(event, {} as AWSLambda.Context);
+
+  sinon.assert.notCalled(deleteParameterFake);
 
   expect(request.isDone()).toBeTruthy();
 });
@@ -161,18 +238,18 @@ test('catch errors', async () => {
         service: 'S3',
         action: 'listObjects',
         parameters: {
-          Bucket: 'my-bucket'
+          Bucket: 'my-bucket',
         },
-        physicalResourceId: 'physicalResourceId',
-        catchErrorPattern: 'NoSuchBucket'
-      } as AwsSdkCall
-    }
+        physicalResourceId: PhysicalResourceId.of('physicalResourceId'),
+        ignoreErrorCodesMatching: 'NoSuchBucket',
+      } as AwsSdkCall,
+    },
   };
 
   const request = createRequest(body =>
     body.Status === 'SUCCESS' &&
     body.PhysicalResourceId === 'physicalResourceId' &&
-    Object.keys(body.Data!).length === 0
+    Object.keys(body.Data!).length === 0,
   );
 
   await handler(event, {} as AWSLambda.Context);
@@ -197,26 +274,26 @@ test('decodes booleans', async () => {
           TableName: 'table',
           Item: {
             True: {
-              BOOL: 'TRUE:BOOLEAN'
+              BOOL: 'TRUE:BOOLEAN',
             },
             TrueString: {
-              S: 'true'
+              S: 'true',
             },
             False: {
-              BOOL: 'FALSE:BOOLEAN'
+              BOOL: 'FALSE:BOOLEAN',
             },
             FalseString: {
-              S: 'false'
+              S: 'false',
             },
-          }
+          },
         },
-        physicalResourceId: 'put-item'
-      } as AwsSdkCall
-    }
+        physicalResourceId: PhysicalResourceId.of('put-item'),
+      } as AwsSdkCall,
+    },
   };
 
   const request = createRequest(body =>
-    body.Status === 'SUCCESS'
+    body.Status === 'SUCCESS',
   );
 
   await handler(event, {} as AWSLambda.Context);
@@ -225,18 +302,18 @@ test('decodes booleans', async () => {
     TableName: 'table',
     Item: {
       True: {
-        BOOL: true
+        BOOL: true,
       },
       TrueString: {
-        S: 'true'
+        S: 'true',
       },
       False: {
-        BOOL: false
+        BOOL: false,
       },
       FalseString: {
-        S: 'false'
+        S: 'false',
       },
-    }
+    },
   });
 
   expect(request.isDone()).toBeTruthy();
@@ -247,13 +324,13 @@ test('restrict output path', async () => {
     Contents: [
       {
         Key: 'first-key',
-        ETag: 'first-key-etag'
+        ETag: 'first-key-etag',
       },
       {
         Key: 'second-key',
         ETag: 'second-key-etag',
-      }
-    ]
+      },
+    ],
   } as SDK.S3.ListObjectsOutput);
 
   AWS.mock('S3', 'listObjects', listObjectsFake);
@@ -267,19 +344,19 @@ test('restrict output path', async () => {
         service: 'S3',
         action: 'listObjects',
         parameters: {
-          Bucket: 'my-bucket'
+          Bucket: 'my-bucket',
         },
-        physicalResourceId: 'id',
-        outputPath: 'Contents.0'
-      } as AwsSdkCall
-    }
+        physicalResourceId: PhysicalResourceId.of('id'),
+        outputPath: 'Contents.0',
+      } as AwsSdkCall,
+    },
   };
 
   const request = createRequest(body =>
     body.Status === 'SUCCESS' &&
     body.PhysicalResourceId === 'id' &&
     body.Data!['Contents.0.Key'] === 'first-key' &&
-    body.Data!['Contents.1.Key'] === undefined
+    body.Data!['Contents.1.Key'] === undefined,
   );
 
   await handler(event, {} as AWSLambda.Context);
@@ -302,19 +379,19 @@ test('can specify apiVersion and region', async () => {
         action: 'publish',
         parameters: {
           Message: 'message',
-          TopicArn: 'topic'
+          TopicArn: 'topic',
         },
         apiVersion: '2010-03-31',
         region: 'eu-west-1',
-        physicalResourceId: 'id',
-      } as AwsSdkCall
-    }
+        physicalResourceId: PhysicalResourceId.of('id'),
+      } as AwsSdkCall,
+    },
   };
 
   const request = createRequest(body =>
     body.Status === 'SUCCESS' &&
     body.Data!.apiVersion === '2010-03-31' &&
-    body.Data!.region === 'eu-west-1'
+    body.Data!.region === 'eu-west-1',
   );
 
   await handler(event, {} as AWSLambda.Context);
@@ -327,7 +404,7 @@ test('flatten correctly flattens a nested object', () => {
     a: { b: 'c' },
     d: [
       { e: 'f' },
-      { g: 'h', i: 1, j: null, k: { l: false } }
+      { g: 'h', i: 1, j: null, k: { l: false } },
     ],
   })).toEqual({
     'a.b': 'c',
@@ -335,6 +412,73 @@ test('flatten correctly flattens a nested object', () => {
     'd.1.g': 'h',
     'd.1.i': 1,
     'd.1.j': null,
-    'd.1.k.l': false
+    'd.1.k.l': false,
   });
+});
+
+test('flatten correctly flattens an object with buffers', () => {
+  expect(flatten({
+    body: Buffer.from('body'),
+    nested: {
+      buffer: Buffer.from('buffer'),
+      array: [
+        Buffer.from('array.0'),
+        Buffer.from('array.1'),
+      ],
+    },
+  })).toEqual({
+    'body': 'body',
+    'nested.buffer': 'buffer',
+    'nested.array.0': 'array.0',
+    'nested.array.1': 'array.1',
+  });
+});
+
+test('installs the latest SDK', async () => {
+  const tmpPath = '/tmp/node_modules/aws-sdk';
+
+  // Symlink to normal SDK to be able to call AWS.setSDK()
+  await fs.ensureDir('/tmp/node_modules');
+  await fs.symlink(require.resolve('aws-sdk'), tmpPath);
+  AWS.setSDK(tmpPath);
+
+  // Now remove the symlink and let the handler install it
+  await fs.unlink(tmpPath);
+
+  const publishFake = sinon.fake.resolves({});
+
+  AWS.mock('SNS', 'publish', publishFake);
+
+  const event: AWSLambda.CloudFormationCustomResourceCreateEvent = {
+    ...eventCommon,
+    RequestType: 'Create',
+    ResourceProperties: {
+      ServiceToken: 'token',
+      Create: {
+        service: 'SNS',
+        action: 'publish',
+        parameters: {
+          Message: 'message',
+          TopicArn: 'topic',
+        },
+        physicalResourceId: PhysicalResourceId.of('id'),
+      } as AwsSdkCall,
+      InstallLatestAwsSdk: 'true',
+    },
+  };
+
+  const request = createRequest(body =>
+    body.Status === 'SUCCESS',
+  );
+
+  // Reset to 'false' so that the next run will reinstall aws-sdk
+  forceSdkInstallation();
+  await handler(event, {} as AWSLambda.Context);
+
+  expect(request.isDone()).toBeTruthy();
+
+  expect(() => require.resolve(tmpPath)).not.toThrow();
+
+  // clean up aws-sdk install
+  await fs.remove(tmpPath);
 });

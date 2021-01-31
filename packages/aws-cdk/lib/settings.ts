@@ -1,9 +1,9 @@
-import fs = require('fs-extra');
-import os = require('os');
-import fs_path = require('path');
-import { Tag } from './api/cxapp/stacks';
+import * as os from 'os';
+import * as fs_path from 'path';
+import * as fs from 'fs-extra';
+import { Tag } from './cdk-toolkit';
 import { debug, warning } from './logging';
-import util = require('./util');
+import * as util from './util';
 
 export type SettingsMap = {[key: string]: any};
 
@@ -18,7 +18,50 @@ export const TRANSIENT_CONTEXT_KEY = '$dontSaveContext';
 
 const CONTEXT_KEY = 'context';
 
-export type Arguments = { readonly [name: string]: unknown };
+export enum Command {
+  LS = 'ls',
+  LIST = 'list',
+  DIFF = 'diff',
+  BOOTSTRAP = 'bootstrap',
+  DEPLOY = 'deploy',
+  DESTROY = 'destroy',
+  SYNTHESIZE = 'synthesize',
+  SYNTH = 'synth',
+  METADATA = 'metadata',
+  INIT = 'init',
+  VERSION = 'version',
+}
+
+const BUNDLING_COMMANDS = [
+  Command.DEPLOY,
+  Command.DIFF,
+  Command.SYNTH,
+  Command.SYNTHESIZE,
+];
+
+export type Arguments = {
+  readonly _: [Command, ...string[]];
+  readonly exclusively?: boolean;
+  readonly STACKS?: string[];
+  readonly lookups?: boolean;
+  readonly [name: string]: unknown;
+};
+
+export interface ConfigurationProps {
+  /**
+   * Configuration passed via command line arguments
+   *
+   * @default - Nothing passed
+   */
+  readonly commandLineArguments?: Arguments;
+
+  /**
+   * Whether or not to use context from `.cdk.json` in user home directory
+   *
+   * @default true
+   */
+  readonly readUserContext?: boolean;
+}
 
 /**
  * All sources of settings combined
@@ -30,7 +73,7 @@ export class Configuration {
   public readonly defaultConfig = new Settings({
     versionReporting: true,
     pathMetadata: true,
-    output: 'cdk.out'
+    output: 'cdk.out',
   });
 
   private readonly commandLineArguments: Settings;
@@ -39,23 +82,23 @@ export class Configuration {
   private _projectContext?: Settings;
   private loaded = false;
 
-  constructor(commandLineArguments?: Arguments) {
-    this.commandLineArguments = commandLineArguments
-                              ? Settings.fromCommandLineArguments(commandLineArguments)
-                              : new Settings();
+  constructor(private readonly props: ConfigurationProps = {}) {
+    this.commandLineArguments = props.commandLineArguments
+      ? Settings.fromCommandLineArguments(props.commandLineArguments)
+      : new Settings();
     this.commandLineContext = this.commandLineArguments.subSettings([CONTEXT_KEY]).makeReadOnly();
   }
 
   private get projectConfig() {
     if (!this._projectConfig) {
-      throw new Error(`#load has not been called yet!`);
+      throw new Error('#load has not been called yet!');
     }
     return this._projectConfig;
   }
 
   private get projectContext() {
     if (!this._projectContext) {
-      throw new Error(`#load has not been called yet!`);
+      throw new Error('#load has not been called yet!');
     }
     return this._projectContext;
   }
@@ -68,12 +111,18 @@ export class Configuration {
     this._projectConfig = await loadAndLog(PROJECT_CONFIG);
     this._projectContext = await loadAndLog(PROJECT_CONTEXT);
 
-    await this.migrateLegacyContext();
+    const readUserContext = this.props.readUserContext ?? true;
 
-    this.context = new Context(
-        this.commandLineContext,
-        this.projectConfig.subSettings([CONTEXT_KEY]).makeReadOnly(),
-        this.projectContext);
+    const contextSources = [
+      this.commandLineContext,
+      this.projectConfig.subSettings([CONTEXT_KEY]).makeReadOnly(),
+      this.projectContext,
+    ];
+    if (readUserContext) {
+      contextSources.push(userConfig.subSettings([CONTEXT_KEY]).makeReadOnly());
+    }
+
+    this.context = new Context(...contextSources);
 
     // Build settings from what's left
     this.settings = this.defaultConfig
@@ -93,39 +142,11 @@ export class Configuration {
    * Save the project context
    */
   public async saveContext(): Promise<this> {
-    if (!this.loaded) { return this; }  // Avoid overwriting files with nothing
+    if (!this.loaded) { return this; } // Avoid overwriting files with nothing
 
     await this.projectContext.save(PROJECT_CONTEXT);
 
     return this;
-  }
-
-  /**
-   * Migrate context from the 'context' field in the projectConfig object to the dedicated object
-   *
-   * Only migrate context whose key contains a ':', to migrate only context generated
-   * by context providers.
-   */
-  private async migrateLegacyContext() {
-    const legacyContext = this.projectConfig.get([CONTEXT_KEY]);
-    if (legacyContext === undefined) { return; }
-
-    const toMigrate = Object.keys(legacyContext).filter(k => k.indexOf(':') > -1);
-    if (toMigrate.length === 0) { return; }
-
-    for (const key of toMigrate) {
-      this.projectContext.set([key], legacyContext[key]);
-      this.projectConfig.unset([CONTEXT_KEY, key]);
-    }
-
-    // If the source object is empty now, completely remove it
-    if (Object.keys(this.projectConfig.get([CONTEXT_KEY])).length === 0) {
-      this.projectConfig.unset([CONTEXT_KEY]);
-    }
-
-    // Save back
-    await this.projectConfig.save(PROJECT_CONFIG);
-    await this.projectContext.save(PROJECT_CONTEXT);
   }
 }
 
@@ -213,16 +234,30 @@ export class Settings {
    */
   public static fromCommandLineArguments(argv: Arguments): Settings {
     const context = this.parseStringContextListToObject(argv);
-    const tags = this.parseStringTagsListToObject(argv);
+    const tags = this.parseStringTagsListToObject(expectStringList(argv.tags));
+
+    // Determine bundling stacks
+    let bundlingStacks: string[];
+    if (BUNDLING_COMMANDS.includes(argv._[0])) {
+    // If we deploy, diff or synth a list of stacks exclusively we skip
+    // bundling for all other stacks.
+      bundlingStacks = argv.exclusively
+        ? argv.STACKS ?? ['*']
+        : ['*'];
+    } else { // Skip bundling for all stacks
+      bundlingStacks = [];
+    }
 
     return new Settings({
       app: argv.app,
       browser: argv.browser,
       context,
+      debug: argv.debug,
       tags,
       language: argv.language,
       pathMetadata: argv.pathMetadata,
       assetMetadata: argv.assetMetadata,
+      profile: argv.profile,
       plugin: argv.plugin,
       requireApproval: argv.requireApproval,
       toolkitStackName: argv.toolkitStackName,
@@ -233,6 +268,9 @@ export class Settings {
       versionReporting: argv.versionReporting,
       staging: argv.staging,
       output: argv.output,
+      progress: argv.progress,
+      bundlingStacks,
+      lookups: argv.lookups,
     });
   }
 
@@ -248,7 +286,7 @@ export class Settings {
     const context: any = {};
 
     for (const assignment of ((argv as any).context || [])) {
-      const parts = assignment.split('=', 2);
+      const parts = assignment.split(/=(.*)/, 2);
       if (parts.length === 2) {
         debug('CLI argument context: %s=%s', parts[0], parts[1]);
         if (parts[0].match(/^aws:.+/)) {
@@ -262,22 +300,33 @@ export class Settings {
     return context;
   }
 
-  private static parseStringTagsListToObject(argv: Arguments): Tag[] {
+  /**
+   * Parse tags out of arguments
+   *
+   * Return undefined if no tags were provided, return an empty array if only empty
+   * strings were provided
+   */
+  private static parseStringTagsListToObject(argTags: string[] | undefined): Tag[] | undefined {
+    if (argTags === undefined) { return undefined; }
+    if (argTags.length === 0) { return undefined; }
+    const nonEmptyTags = argTags.filter(t => t !== '');
+    if (nonEmptyTags.length === 0) { return []; }
+
     const tags: Tag[] = [];
 
-    for (const assignment of ((argv as any).tags || [])) {
+    for (const assignment of nonEmptyTags) {
       const parts = assignment.split('=', 2);
       if (parts.length === 2) {
         debug('CLI argument tags: %s=%s', parts[0], parts[1]);
         tags.push({
-         Key: parts[0],
-         Value: parts[1]
+          Key: parts[0],
+          Value: parts[1],
         });
       } else {
         warning('Tags argument is not an assignment (key=value): %s', assignment);
       }
     }
-    return tags;
+    return tags.length > 0 ? tags : undefined;
   }
 
   constructor(private settings: SettingsMap = {}, public readonly readOnly = false) {}
@@ -358,7 +407,7 @@ export class Settings {
   private prohibitContextKey(key: string, fileName: string) {
     if (!this.settings.context) { return; }
     if (key in this.settings.context) {
-      // tslint:disable-next-line:max-line-length
+      // eslint-disable-next-line max-len
       throw new Error(`The 'context.${key}' key was found in ${fs_path.resolve(fileName)}, but it is no longer supported. Please remove it.`);
     }
   }
@@ -367,7 +416,7 @@ export class Settings {
     if (!this.settings.context) { return; }
     for (const contextKey of Object.keys(this.settings.context)) {
       if (contextKey.startsWith(prefix)) {
-        // tslint:disable-next-line:max-line-length
+        // eslint-disable-next-line max-len
         warning(`A reserved context key ('context.${prefix}') key was found in ${fs_path.resolve(fileName)}, it might cause surprising behavior and should be removed.`);
       }
     }
@@ -401,4 +450,16 @@ function stripTransientValues(obj: {[key: string]: any}) {
  */
 function isTransientValue(value: any) {
   return typeof value === 'object' && value !== null && (value as any)[TRANSIENT_CONTEXT_KEY];
+}
+
+function expectStringList(x: unknown): string[] | undefined {
+  if (x === undefined) { return undefined; }
+  if (!Array.isArray(x)) {
+    throw new Error(`Expected array, got '${x}'`);
+  }
+  const nonStrings = x.filter(e => typeof e !== 'string');
+  if (nonStrings.length > 0) {
+    throw new Error(`Expected list of strings, found ${nonStrings}`);
+  }
+  return x;
 }

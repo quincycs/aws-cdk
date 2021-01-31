@@ -1,7 +1,8 @@
-import { expect, haveResource } from '@aws-cdk/assert';
-import { Construct, Duration, Stack } from '@aws-cdk/core';
+import { ABSENT, expect, haveResource } from '@aws-cdk/assert';
+import { Duration, Stack } from '@aws-cdk/core';
+import { Construct } from 'constructs';
 import { Test } from 'nodeunit';
-import { Alarm, IAlarm, IAlarmAction, Metric } from '../lib';
+import { Alarm, IAlarm, IAlarmAction, Metric, MathExpression, IMetric } from '../lib';
 
 const testMetric = new Metric({
   namespace: 'CDK/Test',
@@ -9,6 +10,38 @@ const testMetric = new Metric({
 });
 
 export = {
+
+  'alarm does not accept a math expression with more than 10 metrics'(test: Test) {
+
+    const stack = new Stack();
+
+    const usingMetrics: Record<string, IMetric> = {};
+
+    for (const i of [...Array(15).keys()]) {
+      const metricName = `metric${i}`;
+      usingMetrics[metricName] = new Metric({
+        namespace: 'CDK/Test',
+        metricName: metricName,
+      });
+    }
+
+    const math = new MathExpression({
+      expression: 'a',
+      usingMetrics,
+    });
+
+    test.throws(() => {
+
+      new Alarm(stack, 'Alarm', {
+        metric: math,
+        threshold: 1000,
+        evaluationPeriods: 3,
+      });
+
+    }, /Alarms on math expressions cannot contain more than 10 individual metrics/);
+
+    test.done();
+  },
   'can make simple alarm'(test: Test) {
     // GIVEN
     const stack = new Stack();
@@ -22,10 +55,10 @@ export = {
 
     // THEN
     expect(stack).to(haveResource('AWS::CloudWatch::Alarm', {
-      ComparisonOperator: "GreaterThanOrEqualToThreshold",
+      ComparisonOperator: 'GreaterThanOrEqualToThreshold',
       EvaluationPeriods: 3,
-      MetricName: "Metric",
-      Namespace: "CDK/Test",
+      MetricName: 'Metric',
+      Namespace: 'CDK/Test',
       Period: 300,
       Statistic: 'Average',
       Threshold: 1000,
@@ -48,10 +81,10 @@ export = {
 
     // THEN
     expect(stack).to(haveResource('AWS::CloudWatch::Alarm', {
-      ComparisonOperator: "GreaterThanOrEqualToThreshold",
+      ComparisonOperator: 'GreaterThanOrEqualToThreshold',
       EvaluationPeriods: 3,
-      MetricName: "Metric",
-      Namespace: "CDK/Test",
+      MetricName: 'Metric',
+      Namespace: 'CDK/Test',
       Period: 600,
       Statistic: 'Average',
       Threshold: 1000,
@@ -74,12 +107,13 @@ export = {
 
     // THEN
     expect(stack).to(haveResource('AWS::CloudWatch::Alarm', {
-      ComparisonOperator: "GreaterThanOrEqualToThreshold",
+      ComparisonOperator: 'GreaterThanOrEqualToThreshold',
       EvaluationPeriods: 3,
-      MetricName: "Metric",
-      Namespace: "CDK/Test",
+      MetricName: 'Metric',
+      Namespace: 'CDK/Test',
       Period: 300,
       Statistic: 'Maximum',
+      ExtendedStatistic: ABSENT,
       Threshold: 1000,
     }));
 
@@ -100,11 +134,12 @@ export = {
 
     // THEN
     expect(stack).to(haveResource('AWS::CloudWatch::Alarm', {
-      ComparisonOperator: "GreaterThanOrEqualToThreshold",
+      ComparisonOperator: 'GreaterThanOrEqualToThreshold',
       EvaluationPeriods: 3,
-      MetricName: "Metric",
-      Namespace: "CDK/Test",
+      MetricName: 'Metric',
+      Namespace: 'CDK/Test',
       Period: 300,
+      Statistic: ABSENT,
       ExtendedStatistic: 'p99',
       Threshold: 1000,
     }));
@@ -126,11 +161,11 @@ export = {
 
     // THEN
     expect(stack).to(haveResource('AWS::CloudWatch::Alarm', {
-      ComparisonOperator: "GreaterThanOrEqualToThreshold",
+      ComparisonOperator: 'GreaterThanOrEqualToThreshold',
       EvaluationPeriods: 3,
       DatapointsToAlarm: 2,
-      MetricName: "Metric",
-      Namespace: "CDK/Test",
+      MetricName: 'Metric',
+      Namespace: 'CDK/Test',
       Period: 300,
       Statistic: 'Average',
       Threshold: 1000,
@@ -147,7 +182,7 @@ export = {
     const alarm = new Alarm(stack, 'Alarm', {
       metric: testMetric,
       threshold: 1000,
-      evaluationPeriods: 2
+      evaluationPeriods: 2,
     });
 
     alarm.addAlarmAction(new TestAlarmAction('A'));
@@ -178,10 +213,10 @@ export = {
 
     // THEN
     expect(stack).to(haveResource('AWS::CloudWatch::Alarm', {
-      ComparisonOperator: "GreaterThanOrEqualToThreshold",
+      ComparisonOperator: 'GreaterThanOrEqualToThreshold',
       EvaluationPeriods: 2,
-      MetricName: "Metric",
-      Namespace: "CDK/Test",
+      MetricName: 'Metric',
+      Namespace: 'CDK/Test',
       Period: 10,
       Statistic: 'Minimum',
       Threshold: 1000,
@@ -198,7 +233,7 @@ export = {
     testMetric.createAlarm(stack, 'Alarm', {
       threshold: 1000,
       evaluationPeriods: 2,
-      statistic: 'p99.9'
+      statistic: 'p99.9',
     });
 
     // THEN
@@ -207,7 +242,7 @@ export = {
     }));
 
     test.done();
-  }
+  },
 };
 
 class TestAlarmAction implements IAlarmAction {

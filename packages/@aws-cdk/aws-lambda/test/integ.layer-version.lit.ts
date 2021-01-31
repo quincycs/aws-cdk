@@ -1,6 +1,6 @@
-import cdk = require('@aws-cdk/core');
-import path = require('path');
-import lambda = require('../lib');
+import * as path from 'path';
+import * as cdk from '@aws-cdk/core';
+import * as lambda from '../lib';
 
 const app = new cdk.App();
 

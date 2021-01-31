@@ -1,16 +1,13 @@
-import codepipeline = require('@aws-cdk/aws-codepipeline');
-import iam = require('@aws-cdk/aws-iam');
-import lambda = require('@aws-cdk/aws-lambda');
-import { Construct, Stack } from "@aws-cdk/core";
+import * as codepipeline from '@aws-cdk/aws-codepipeline';
+import * as iam from '@aws-cdk/aws-iam';
+import * as lambda from '@aws-cdk/aws-lambda';
+import { Construct, Stack } from '@aws-cdk/core';
 import { Action } from '../action';
 
 /**
  * Construction properties of the {@link LambdaInvokeAction Lambda invoke CodePipeline Action}.
  */
 export interface LambdaInvokeActionProps extends codepipeline.CommonAwsActionProps {
-  // because of @see links
-  // tslint:disable:max-line-length
-
   /**
    * The optional input Artifacts of the Action.
    * A Lambda Action can have up to 5 inputs.
@@ -40,8 +37,6 @@ export interface LambdaInvokeActionProps extends codepipeline.CommonAwsActionPro
    * @see https://docs.aws.amazon.com/codepipeline/latest/userguide/actions-invoke-lambda-function.html#actions-invoke-lambda-function-json-event-example
    */
   readonly userParameters?: { [key: string]: any };
-
-  // tslint:enable:max-line-length
 
   /**
    * The lambda function to invoke.
@@ -74,18 +69,33 @@ export class LambdaInvokeAction extends Action {
     this.props = props;
   }
 
+  /**
+   * Reference a CodePipeline variable defined by the Lambda function this action points to.
+   * Variables in Lambda invoke actions are defined by calling the PutJobSuccessResult CodePipeline API call
+   * with the 'outputVariables' property filled.
+   *
+   * @param variableName the name of the variable to reference.
+   *   A variable by this name must be present in the 'outputVariables' section of the PutJobSuccessResult
+   *   request that the Lambda function calls when the action is invoked
+   *
+   * @see https://docs.aws.amazon.com/codepipeline/latest/APIReference/API_PutJobSuccessResult.html
+   */
+  public variable(variableName: string): string {
+    return this.variableExpression(variableName);
+  }
+
   protected bound(scope: Construct, _stage: codepipeline.IStage, options: codepipeline.ActionBindOptions):
-      codepipeline.ActionConfig {
+  codepipeline.ActionConfig {
     // allow pipeline to list functions
     options.role.addToPolicy(new iam.PolicyStatement({
       actions: ['lambda:ListFunctions'],
-      resources: ['*']
+      resources: ['*'],
     }));
 
     // allow pipeline to invoke this lambda functionn
     options.role.addToPolicy(new iam.PolicyStatement({
       actions: ['lambda:InvokeFunction'],
-      resources: [this.props.lambda.functionArn]
+      resources: [this.props.lambda.functionArn],
     }));
 
     // allow the Role access to the Bucket, if there are any inputs/outputs
@@ -101,7 +111,7 @@ export class LambdaInvokeAction extends Action {
     // (the Pipeline ARN will not be enough)
     this.props.lambda.addToRolePolicy(new iam.PolicyStatement({
       resources: ['*'],
-      actions: ['codepipeline:PutJobSuccessResult', 'codepipeline:PutJobFailureResult']
+      actions: ['codepipeline:PutJobSuccessResult', 'codepipeline:PutJobFailureResult'],
     }));
 
     return {

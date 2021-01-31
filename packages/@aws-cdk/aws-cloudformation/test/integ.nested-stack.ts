@@ -1,9 +1,11 @@
-import lambda = require('@aws-cdk/aws-lambda');
-import sns = require('@aws-cdk/aws-sns');
-import sns_subscriptions = require('@aws-cdk/aws-sns-subscriptions');
-import sqs = require('@aws-cdk/aws-sqs');
+import * as lambda from '@aws-cdk/aws-lambda';
+import * as sns from '@aws-cdk/aws-sns';
+import * as sns_subscriptions from '@aws-cdk/aws-sns-subscriptions';
+import * as sqs from '@aws-cdk/aws-sqs';
 import { App, CfnParameter, Construct, Stack } from '@aws-cdk/core';
-import cfn = require('../lib');
+import * as cfn from '../lib';
+
+/* eslint-disable cdk/no-core-construct */
 
 interface MyNestedStackProps {
   readonly subscriber?: sqs.Queue;
@@ -18,14 +20,14 @@ class MyNestedStack extends cfn.NestedStack {
 
     super(scope, id, {
       parameters: {
-        [topicNamePrefixLogicalId]: props.topicNamePrefix // pass in a parameter to the nested stack
-      }
+        [topicNamePrefixLogicalId]: props.topicNamePrefix, // pass in a parameter to the nested stack
+      },
     });
 
     const topicNamePrefixParameter = new CfnParameter(this, 'TopicNamePrefix', { type: 'String' });
 
     for (let i = 0; i < props.topicCount; ++i) {
-      const topic = new sns.Topic(this, `topic-${i}`, { displayName: `${topicNamePrefixParameter.valueAsString}-${i}`});
+      const topic = new sns.Topic(this, `topic-${i}`, { displayName: `${topicNamePrefixParameter.valueAsString}-${i}` });
 
       // since the subscription resources are defined in the subscriber's stack, this
       // will add an SNS subscription resource to the parent stack that reference this topic.
@@ -41,8 +43,8 @@ class MyNestedStack extends cfn.NestedStack {
         handler: 'index.handler',
         environment: {
           TOPIC_ARN: props.siblingTopic ? props.siblingTopic.topicArn : '',
-          QUEUE_URL: props.subscriber.queueUrl // nested stack references a resource in the parent
-        }
+          QUEUE_URL: props.subscriber.queueUrl, // nested stack references a resource in the parent
+        },
       });
     }
   }

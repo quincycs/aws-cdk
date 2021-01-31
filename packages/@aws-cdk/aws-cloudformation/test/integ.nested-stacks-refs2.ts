@@ -1,9 +1,11 @@
 /// !cdk-integ *
-import sns = require('@aws-cdk/aws-sns');
+import * as sns from '@aws-cdk/aws-sns';
 import { App, Construct, Fn, Stack } from '@aws-cdk/core';
-import cfn = require('../lib');
+import * as cfn from '../lib';
 
 // non-nested non-parent stack consumes a resource from a nested stack
+
+/* eslint-disable cdk/no-core-construct */
 
 class ProducerNestedStack extends cfn.NestedStack {
   public readonly topic: sns.Topic;
@@ -31,7 +33,7 @@ class ConsumerStack extends Stack {
     super(scope, id);
 
     new sns.Topic(this, 'ConsumerTopic', {
-      displayName: `Consuming ${Fn.select(2, Fn.split('-', topic.topicName))}` // just shorten because display name is limited
+      displayName: `Consuming ${Fn.select(2, Fn.split('-', topic.topicName))}`, // just shorten because display name is limited
     });
   }
 }

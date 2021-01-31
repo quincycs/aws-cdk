@@ -1,8 +1,13 @@
 import { findAlarmThresholds, normalizeIntervals } from '@aws-cdk/aws-autoscaling-common';
-import cloudwatch = require('@aws-cdk/aws-cloudwatch');
-import cdk = require('@aws-cdk/core');
+import * as cloudwatch from '@aws-cdk/aws-cloudwatch';
+import * as cdk from '@aws-cdk/core';
+import { Construct } from 'constructs';
 import { IScalableTarget } from './scalable-target';
 import { AdjustmentType, MetricAggregationType, StepScalingAction } from './step-scaling-action';
+
+// keep this import separate from other imports to reduce chance for merge conflicts with v2-main
+// eslint-disable-next-line no-duplicate-imports, import/order
+import { Construct as CoreConstruct } from '@aws-cdk/core';
 
 export interface BasicStepScalingPolicyProps {
   /**
@@ -56,19 +61,19 @@ export interface StepScalingPolicyProps extends BasicStepScalingPolicyProps {
 }
 
 /**
- * Define a acaling strategy which scales depending on absolute values of some metric.
+ * Define a scaling strategy which scales depending on absolute values of some metric.
  *
  * You can specify the scaling behavior for various values of the metric.
  *
  * Implemented using one or more CloudWatch alarms and Step Scaling Policies.
  */
-export class StepScalingPolicy extends cdk.Construct {
+export class StepScalingPolicy extends CoreConstruct {
   public readonly lowerAlarm?: cloudwatch.Alarm;
   public readonly lowerAction?: StepScalingAction;
   public readonly upperAlarm?: cloudwatch.Alarm;
   public readonly upperAction?: StepScalingAction;
 
-  constructor(scope: cdk.Construct, id: string, props: StepScalingPolicyProps) {
+  constructor(scope: Construct, id: string, props: StepScalingPolicyProps) {
     super(scope, id);
 
     if (props.scalingSteps.length < 2) {
@@ -103,7 +108,6 @@ export class StepScalingPolicy extends cdk.Construct {
       this.lowerAlarm = new cloudwatch.Alarm(this, 'LowerAlarm', {
         // Recommended by AutoScaling
         metric: props.metric,
-        period: cdk.Duration.minutes(1), // Recommended by AutoScaling
         alarmDescription: 'Lower threshold scaling alarm',
         comparisonOperator: cloudwatch.ComparisonOperator.LESS_THAN_OR_EQUAL_TO_THRESHOLD,
         evaluationPeriods: 1,
@@ -134,7 +138,6 @@ export class StepScalingPolicy extends cdk.Construct {
       this.upperAlarm = new cloudwatch.Alarm(this, 'UpperAlarm', {
         // Recommended by AutoScaling
         metric: props.metric,
-        period: cdk.Duration.minutes(1), // Recommended by AutoScaling
         alarmDescription: 'Upper threshold scaling alarm',
         comparisonOperator: cloudwatch.ComparisonOperator.GREATER_THAN_OR_EQUAL_TO_THRESHOLD,
         evaluationPeriods: 1,
@@ -182,8 +185,10 @@ export interface ScalingInterval {
   readonly change: number;
 }
 
-function aggregationTypeFromMetric(metric: cloudwatch.IMetric): MetricAggregationType {
-  const statistic = metric.toAlarmConfig().statistic;
+function aggregationTypeFromMetric(metric: cloudwatch.IMetric): MetricAggregationType | undefined {
+  const statistic = metric.toMetricConfig().metricStat?.statistic;
+  if (statistic == null) { return undefined; } // Math expression, don't know aggregation, leave default
+
   switch (statistic) {
     case 'Average':
       return MetricAggregationType.AVERAGE;
@@ -209,7 +214,7 @@ class StepScalingAlarmAction implements cloudwatch.IAlarmAction {
   constructor(private readonly stepScalingAction: StepScalingAction) {
   }
 
-  public bind(_scope: cdk.Construct, _alarm: cloudwatch.IAlarm): cloudwatch.AlarmActionConfig {
+  public bind(_scope: CoreConstruct, _alarm: cloudwatch.IAlarm): cloudwatch.AlarmActionConfig {
     return { alarmActionArn: this.stepScalingAction.scalingPolicyArn };
   }
 }

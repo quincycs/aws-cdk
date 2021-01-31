@@ -1,7 +1,7 @@
-import s3 = require('@aws-cdk/aws-s3');
-import cdk = require('@aws-cdk/core');
-import path = require('path');
-import s3deploy = require('../lib');
+import * as path from 'path';
+import * as s3 from '@aws-cdk/aws-s3';
+import * as cdk from '@aws-cdk/core';
+import * as s3deploy from '../lib';
 
 class TestBucketDeployment extends cdk.Stack {
   constructor(scope: cdk.App, id: string) {
@@ -9,8 +9,8 @@ class TestBucketDeployment extends cdk.Stack {
 
     const destinationBucket = new s3.Bucket(this, 'Destination', {
       websiteIndexDocument: 'index.html',
-      publicReadAccess: true,
-      removalPolicy: cdk.RemovalPolicy.DESTROY
+      publicReadAccess: false,
+      removalPolicy: cdk.RemovalPolicy.DESTROY,
     });
 
     new s3deploy.BucketDeployment(this, 'DeployMe', {
@@ -27,6 +27,25 @@ class TestBucketDeployment extends cdk.Stack {
       destinationKeyPrefix: 'deploy/here/',
       retainOnDelete: false, // default is true, which will block the integration test cleanup
     });
+
+    const bucket3 = new s3.Bucket(this, 'Destination3');
+
+    new s3deploy.BucketDeployment(this, 'DeployWithMetadata', {
+      sources: [s3deploy.Source.asset(path.join(__dirname, 'my-website'))],
+      destinationBucket: bucket3,
+      retainOnDelete: false, // default is true, which will block the integration test cleanup
+      cacheControl: [s3deploy.CacheControl.setPublic(), s3deploy.CacheControl.maxAge(cdk.Duration.minutes(1))],
+      contentType: 'text/html',
+      metadata: { A: 'aaa', B: 'bbb', C: 'ccc' },
+    });
+
+    new s3deploy.BucketDeployment(this, 'DeployMeWithoutDeletingFilesOnDestination', {
+      sources: [s3deploy.Source.asset(path.join(__dirname, 'my-website'))],
+      destinationBucket,
+      prune: false,
+      retainOnDelete: false,
+    });
+
   }
 }
 

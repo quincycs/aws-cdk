@@ -1,12 +1,13 @@
-// tslint:disable: max-line-length
-import cfn = require('@aws-cdk/aws-cloudformation');
-import lambda = require('@aws-cdk/aws-lambda');
-import sfn = require('@aws-cdk/aws-stepfunctions');
-import tasks = require('@aws-cdk/aws-stepfunctions-tasks');
-import { Construct, Duration } from '@aws-cdk/core';
-import path = require('path');
-import consts = require('./runtime/consts');
+import * as path from 'path';
+import * as cfn from '@aws-cdk/aws-cloudformation';
+import * as ec2 from '@aws-cdk/aws-ec2';
+import * as lambda from '@aws-cdk/aws-lambda';
+import * as logs from '@aws-cdk/aws-logs';
+import { Construct as CoreConstruct, Duration } from '@aws-cdk/core';
+import { Construct } from 'constructs';
+import * as consts from './runtime/consts';
 import { calculateRetryPolicy } from './util';
+import { WaiterStateMachine } from './waiter-state-machine';
 
 const RUNTIME_HANDLER_PATH = path.join(__dirname, 'runtime');
 const FRAMEWORK_HANDLER_TIMEOUT = Duration.minutes(15); // keep it simple for now
@@ -61,12 +62,39 @@ export interface ProviderProps {
    * @default Duration.minutes(30)
    */
   readonly totalTimeout?: Duration;
+
+  /**
+   * The number of days framework log events are kept in CloudWatch Logs. When
+   * updating this property, unsetting it doesn't remove the log retention policy.
+   * To remove the retention policy, set the value to `INFINITE`.
+   *
+   * @default logs.RetentionDays.INFINITE
+   */
+  readonly logRetention?: logs.RetentionDays;
+
+  /**
+   * The vpc to provision the lambda functions in.
+   *
+   * @default - functions are not provisioned inside a vpc.
+   */
+  readonly vpc?: ec2.IVpc;
+
+  /**
+   * Which subnets from the VPC to place the lambda functions in.
+   *
+   * Only used if 'vpc' is supplied. Note: internet access for Lambdas
+   * requires a NAT gateway, so picking Public subnets is not allowed.
+   *
+   * @default - the Vpc default strategy if not specified
+   */
+  readonly vpcSubnets?: ec2.SubnetSelection;
+
 }
 
 /**
  * Defines an AWS CloudFormation custom resource provider.
  */
-export class Provider extends Construct implements cfn.ICustomResourceProvider {
+export class Provider extends CoreConstruct implements cfn.ICustomResourceProvider {
 
   /**
    * The user-defined AWS Lambda function which is invoked for all resource
@@ -80,17 +108,31 @@ export class Provider extends Construct implements cfn.ICustomResourceProvider {
    */
   public readonly isCompleteHandler?: lambda.IFunction;
 
+  /**
+   * The service token to use in order to define custom resources that are
+   * backed by this provider.
+   */
+  public readonly serviceToken: string;
+
   private readonly entrypoint: lambda.Function;
+  private readonly logRetention?: logs.RetentionDays;
+  private readonly vpc?: ec2.IVpc;
+  private readonly vpcSubnets?: ec2.SubnetSelection;
 
   constructor(scope: Construct, id: string, props: ProviderProps) {
     super(scope, id);
 
     if (!props.isCompleteHandler && (props.queryInterval || props.totalTimeout)) {
-      throw new Error(`"queryInterval" and "totalTimeout" can only be configured if "isCompleteHandler" is specified. Otherwise, they have no meaning`);
+      throw new Error('"queryInterval" and "totalTimeout" can only be configured if "isCompleteHandler" is specified. '
+        + 'Otherwise, they have no meaning');
     }
 
     this.onEventHandler = props.onEventHandler;
     this.isCompleteHandler = props.isCompleteHandler;
+
+    this.logRetention = props.logRetention;
+    this.vpc = props.vpc;
+    this.vpcSubnets = props.vpcSubnets;
 
     const onEventFunction = this.createFunction(consts.FRAMEWORK_ON_EVENT_HANDLER_NAME);
 
@@ -98,12 +140,13 @@ export class Provider extends Construct implements cfn.ICustomResourceProvider {
       const isCompleteFunction = this.createFunction(consts.FRAMEWORK_IS_COMPLETE_HANDLER_NAME);
       const timeoutFunction = this.createFunction(consts.FRAMEWORK_ON_TIMEOUT_HANDLER_NAME);
 
-      const isCompleteTask = this.createTask(isCompleteFunction);
-      isCompleteTask.addCatch(this.createTask(timeoutFunction));
-      isCompleteTask.addRetry(calculateRetryPolicy(props));
-
-      const waiterStateMachine = new sfn.StateMachine(this, 'waiter-state-machine', {
-        definition: isCompleteTask
+      const retry = calculateRetryPolicy(props);
+      const waiterStateMachine = new WaiterStateMachine(this, 'waiter-state-machine', {
+        isCompleteHandler: isCompleteFunction,
+        timeoutHandler: timeoutFunction,
+        backoffRate: retry.backoffRate,
+        interval: retry.interval,
+        maxAttempts: retry.maxAttempts,
       });
 
       // the on-event entrypoint is going to start the execution of the waiter
@@ -112,23 +155,29 @@ export class Provider extends Construct implements cfn.ICustomResourceProvider {
     }
 
     this.entrypoint = onEventFunction;
+    this.serviceToken = this.entrypoint.functionArn;
   }
 
   /**
    * Called by `CustomResource` which uses this provider.
+   * @deprecated use `provider.serviceToken` instead
    */
-  public bind(_: Construct): cfn.CustomResourceProviderConfig {
+  public bind(_: CoreConstruct): cfn.CustomResourceProviderConfig {
     return {
-      serviceToken: this.entrypoint.functionArn
+      serviceToken: this.entrypoint.functionArn,
     };
   }
 
   private createFunction(entrypoint: string) {
     const fn = new lambda.Function(this, `framework-${entrypoint}`, {
       code: lambda.Code.fromAsset(RUNTIME_HANDLER_PATH),
+      description: `AWS CDK resource provider framework - ${entrypoint} (${this.node.path})`.slice(0, 256),
       runtime: lambda.Runtime.NODEJS_10_X,
       handler: `framework.${entrypoint}`,
       timeout: FRAMEWORK_HANDLER_TIMEOUT,
+      logRetention: this.logRetention,
+      vpc: this.vpc,
+      vpcSubnets: this.vpcSubnets,
     });
 
     fn.addEnvironment(consts.USER_ON_EVENT_FUNCTION_ARN_ENV, this.onEventHandler.functionArn);
@@ -140,11 +189,5 @@ export class Provider extends Construct implements cfn.ICustomResourceProvider {
     }
 
     return fn;
-  }
-
-  private createTask(handler: lambda.Function) {
-    return new sfn.Task(this, `${handler.node.id}-task`, {
-      task: new tasks.InvokeFunction(handler),
-    });
   }
 }

@@ -21,6 +21,7 @@ for template in $templates; do
 
     setup
 
-    cdk init -l javascript -t $template
+    cdk init -l javascript $template
+    npm run test
     cdk synth
 done

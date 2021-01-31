@@ -1,5 +1,5 @@
 import { Ec2Service, Ec2TaskDefinition } from '@aws-cdk/aws-ecs';
-import { Construct } from '@aws-cdk/core';
+import { Construct } from 'constructs';
 import { NetworkLoadBalancedServiceBase, NetworkLoadBalancedServiceBaseProps } from '../base/network-load-balanced-service-base';
 
 /**
@@ -97,8 +97,8 @@ export class NetworkLoadBalancedEc2Service extends NetworkLoadBalancedServiceBas
       // Create log driver if logging is enabled
       const enableLogging = taskImageOptions.enableLogging !== undefined ? taskImageOptions.enableLogging : true;
       const logDriver = taskImageOptions.logDriver !== undefined
-                          ? taskImageOptions.logDriver : enableLogging
-                            ? this.createAWSLogDriver(this.node.id) : undefined;
+        ? taskImageOptions.logDriver : enableLogging
+          ? this.createAWSLogDriver(this.node.id) : undefined;
 
       const containerName = taskImageOptions.containerName !== undefined ? taskImageOptions.containerName : 'web';
       const container = this.taskDefinition.addContainer(containerName, {
@@ -111,13 +111,13 @@ export class NetworkLoadBalancedEc2Service extends NetworkLoadBalancedServiceBas
         logging: logDriver,
       });
       container.addPortMappings({
-        containerPort: taskImageOptions.containerPort || 80
+        containerPort: taskImageOptions.containerPort || 80,
       });
     } else {
       throw new Error('You must specify one of: taskDefinition or image');
     }
 
-    this.service = new Ec2Service(this, "Service", {
+    this.service = new Ec2Service(this, 'Service', {
       cluster: this.cluster,
       desiredCount: this.desiredCount,
       taskDefinition: this.taskDefinition,
@@ -129,6 +129,7 @@ export class NetworkLoadBalancedEc2Service extends NetworkLoadBalancedServiceBas
       propagateTags: props.propagateTags,
       enableECSManagedTags: props.enableECSManagedTags,
       cloudMapOptions: props.cloudMapOptions,
+      deploymentController: props.deploymentController,
     });
     this.addServiceAsTarget(this.service);
   }

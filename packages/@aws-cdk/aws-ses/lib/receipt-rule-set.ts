@@ -1,4 +1,5 @@
-import { Construct, IResource, Resource } from '@aws-cdk/core';
+import { IResource, Resource } from '@aws-cdk/core';
+import { Construct } from 'constructs';
 import { DropSpamReceiptRule, ReceiptRule, ReceiptRuleOptions } from './receipt-rule';
 import { CfnReceiptRuleSet } from './ses.generated';
 
@@ -63,7 +64,7 @@ abstract class ReceiptRuleSetBase extends Resource implements IReceiptRuleSet {
     this.lastAddedRule = new ReceiptRule(this, id, {
       after: this.lastAddedRule ? this.lastAddedRule : undefined,
       ruleSet: this,
-      ...options
+      ...options,
     });
 
     return this.lastAddedRule;
@@ -74,7 +75,7 @@ abstract class ReceiptRuleSetBase extends Resource implements IReceiptRuleSet {
    */
   protected addDropSpamRule(): void {
     const dropSpam = new DropSpamReceiptRule(this, 'DropSpam', {
-      ruleSet: this
+      ruleSet: this,
     });
     this.lastAddedRule = dropSpam.rule;
   }

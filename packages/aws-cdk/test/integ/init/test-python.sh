@@ -21,9 +21,9 @@ for template in $templates; do
 
     setup
 
-    cdk init -l python -t $template
+    cdk init -l python $template
 
-    source .env/bin/activate
+    source .venv/bin/activate
     type -p pip
     pip install -r requirements.txt
 

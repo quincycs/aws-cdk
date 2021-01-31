@@ -1,4 +1,4 @@
-import ses = require('@aws-cdk/aws-ses');
+import * as ses from '@aws-cdk/aws-ses';
 
 /**
  * Construction properties for a add header action.
@@ -27,9 +27,8 @@ export class AddHeader implements ses.IReceiptRuleAction {
 
   constructor(props: AddHeaderProps) {
     if (!/^[a-zA-Z0-9-]{1,50}$/.test(props.name)) {
-      // tslint:disable:max-line-length
+      // eslint-disable-next-line max-len
       throw new Error('Header `name` must be between 1 and 50 characters, inclusive, and consist of alphanumeric (a-z, A-Z, 0-9) characters and dashes only.');
-      // tslint:enable:max-line-length
     }
 
     if (!/^[^\n\r]{0,2047}$/.test(props.value)) {
@@ -44,8 +43,8 @@ export class AddHeader implements ses.IReceiptRuleAction {
     return {
       addHeaderAction: {
         headerName: this.name,
-        headerValue: this.value
-      }
+        headerValue: this.value,
+      },
     };
   }
 }

@@ -1,10 +1,33 @@
 import { IVpc } from '@aws-cdk/aws-ec2';
-import { AwsLogDriver, BaseService, CloudMapOptions, Cluster, ContainerImage, ICluster, LogDriver, PropagatedTagSource, Secret } from '@aws-cdk/aws-ecs';
-import { NetworkListener, NetworkLoadBalancer, NetworkTargetGroup } from '@aws-cdk/aws-elasticloadbalancingv2';
+import { AwsLogDriver, BaseService, CloudMapOptions, Cluster, ContainerImage, DeploymentController, ICluster, LogDriver, PropagatedTagSource, Secret } from '@aws-cdk/aws-ecs';
+import { INetworkLoadBalancer, NetworkListener, NetworkLoadBalancer, NetworkTargetGroup } from '@aws-cdk/aws-elasticloadbalancingv2';
 import { IRole } from '@aws-cdk/aws-iam';
-import { AddressRecordTarget, ARecord, IHostedZone } from '@aws-cdk/aws-route53';
+import { ARecord, CnameRecord, IHostedZone, RecordTarget } from '@aws-cdk/aws-route53';
 import { LoadBalancerTarget } from '@aws-cdk/aws-route53-targets';
-import cdk = require('@aws-cdk/core');
+import * as cdk from '@aws-cdk/core';
+import { Construct } from 'constructs';
+
+// keep this import separate from other imports to reduce chance for merge conflicts with v2-main
+// eslint-disable-next-line no-duplicate-imports, import/order
+import { Construct as CoreConstruct } from '@aws-cdk/core';
+
+/**
+ * Describes the type of DNS record the service should create
+ */
+export enum NetworkLoadBalancedServiceRecordType {
+  /**
+   * Create Route53 A Alias record
+   */
+  ALIAS,
+  /**
+   * Create a CNAME record
+   */
+  CNAME,
+  /**
+   * Do not create any DNS records
+   */
+  NONE
+}
 
 /**
  * The properties for the base NetworkLoadBalancedEc2Service or NetworkLoadBalancedFargateService service.
@@ -97,12 +120,14 @@ export interface NetworkLoadBalancedServiceBaseProps {
 
   /**
    * The network load balancer that will serve traffic to the service.
+   * If the load balancer has been imported, the vpc attribute must be specified
+   * in the call to fromNetworkLoadBalancerAttributes().
    *
    * [disable-awslint:ref-via-interface]
    *
    * @default - a new load balancer will be created.
    */
-  readonly loadBalancer?: NetworkLoadBalancer;
+  readonly loadBalancer?: INetworkLoadBalancer;
 
   /**
    * Listener port of the network load balancer that will serve traffic to the service.
@@ -133,6 +158,22 @@ export interface NetworkLoadBalancedServiceBaseProps {
    * @default - AWS Cloud Map service discovery is not enabled.
    */
   readonly cloudMapOptions?: CloudMapOptions;
+
+  /**
+   * Specifies whether the Route53 record should be a CNAME, an A record using the Alias feature or no record at all.
+   * This is useful if you need to work with DNS systems that do not support alias records.
+   *
+   * @default NetworkLoadBalancedServiceRecordType.ALIAS
+   */
+  readonly recordType?: NetworkLoadBalancedServiceRecordType;
+
+  /**
+ * Specifies which deployment controller to use for the service. For more information, see
+ * [Amazon ECS Deployment Types](https://docs.aws.amazon.com/AmazonECS/latest/developerguide/deployment-types.html)
+ *
+ * @default - Rolling update (ECS)
+ */
+  readonly deploymentController?: DeploymentController;
 }
 
 export interface NetworkLoadBalancedTaskImageOptions {
@@ -219,7 +260,7 @@ export interface NetworkLoadBalancedTaskImageOptions {
 /**
  * The base class for NetworkLoadBalancedEc2Service and NetworkLoadBalancedFargateService services.
  */
-export abstract class NetworkLoadBalancedServiceBase extends cdk.Construct {
+export abstract class NetworkLoadBalancedServiceBase extends CoreConstruct {
   /**
    * The desired number of instantiations of the task definition to keep running on the service.
    */
@@ -228,7 +269,12 @@ export abstract class NetworkLoadBalancedServiceBase extends cdk.Construct {
   /**
    * The Network Load Balancer for the service.
    */
-  public readonly loadBalancer: NetworkLoadBalancer;
+  public get loadBalancer(): NetworkLoadBalancer {
+    if (!this._networkLoadBalancer) {
+      throw new Error('.loadBalancer can only be accessed if the class was constructed with an owned, not imported, load balancer');
+    }
+    return this._networkLoadBalancer;
+  }
 
   /**
    * The listener for the service.
@@ -245,10 +291,11 @@ export abstract class NetworkLoadBalancedServiceBase extends cdk.Construct {
    */
   public readonly cluster: ICluster;
 
+  private readonly _networkLoadBalancer?: NetworkLoadBalancer;
   /**
    * Constructs a new instance of the NetworkLoadBalancedServiceBase class.
    */
-  constructor(scope: cdk.Construct, id: string, props: NetworkLoadBalancedServiceBaseProps = {}) {
+  constructor(scope: Construct, id: string, props: NetworkLoadBalancedServiceBaseProps = {}) {
     super(scope, id);
 
     if (props.cluster && props.vpc) {
@@ -265,18 +312,19 @@ export abstract class NetworkLoadBalancedServiceBase extends cdk.Construct {
 
     const lbProps = {
       vpc: this.cluster.vpc,
-      internetFacing
+      internetFacing,
     };
 
-    this.loadBalancer = props.loadBalancer !== undefined ? props.loadBalancer : new NetworkLoadBalancer(this, 'LB', lbProps);
+    const loadBalancer = props.loadBalancer !== undefined ? props.loadBalancer :
+      new NetworkLoadBalancer(this, 'LB', lbProps);
 
     const listenerPort = props.listenerPort !== undefined ? props.listenerPort : 80;
 
     const targetProps = {
-      port: 80
+      port: 80,
     };
 
-    this.listener = this.loadBalancer.addListener('PublicListener', { port: listenerPort });
+    this.listener = loadBalancer.addListener('PublicListener', { port: listenerPort });
     this.targetGroup = this.listener.addTargets('ECS', targetProps);
 
     if (typeof props.domainName !== 'undefined') {
@@ -284,20 +332,40 @@ export abstract class NetworkLoadBalancedServiceBase extends cdk.Construct {
         throw new Error('A Route53 hosted domain zone name is required to configure the specified domain name');
       }
 
-      new ARecord(this, "DNS", {
-        zone: props.domainZone,
-        recordName: props.domainName,
-        target: AddressRecordTarget.fromAlias(new LoadBalancerTarget(this.loadBalancer)),
-      });
+      switch (props.recordType ?? NetworkLoadBalancedServiceRecordType.ALIAS) {
+        case NetworkLoadBalancedServiceRecordType.ALIAS:
+          new ARecord(this, 'DNS', {
+            zone: props.domainZone,
+            recordName: props.domainName,
+            target: RecordTarget.fromAlias(new LoadBalancerTarget(loadBalancer)),
+          });
+          break;
+        case NetworkLoadBalancedServiceRecordType.CNAME:
+          new CnameRecord(this, 'DNS', {
+            zone: props.domainZone,
+            recordName: props.domainName,
+            domainName: loadBalancer.loadBalancerDnsName,
+          });
+          break;
+        case NetworkLoadBalancedServiceRecordType.NONE:
+          // Do not create a DNS record
+          break;
+      }
     }
 
-    new cdk.CfnOutput(this, 'LoadBalancerDNS', { value: this.loadBalancer.loadBalancerDnsName });
+    if (loadBalancer instanceof NetworkLoadBalancer) {
+      this._networkLoadBalancer = loadBalancer;
+    }
+
+    if (props.loadBalancer === undefined) {
+      new cdk.CfnOutput(this, 'LoadBalancerDNS', { value: this.loadBalancer.loadBalancerDnsName });
+    }
   }
 
   /**
    * Returns the default cluster.
    */
-  protected getDefaultCluster(scope: cdk.Construct, vpc?: IVpc): Cluster {
+  protected getDefaultCluster(scope: CoreConstruct, vpc?: IVpc): Cluster {
     // magic string to avoid collision with user-defined constructs
     const DEFAULT_CLUSTER_ID = `EcsDefaultClusterMnL3mNNYN${vpc ? vpc.node.id : ''}`;
     const stack = cdk.Stack.of(scope);

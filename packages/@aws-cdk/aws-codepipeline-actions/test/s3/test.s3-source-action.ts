@@ -1,12 +1,12 @@
-import { countResources, expect, haveResourceLike, not } from "@aws-cdk/assert";
-import codebuild = require('@aws-cdk/aws-codebuild');
-import codepipeline = require('@aws-cdk/aws-codepipeline');
-import s3 = require('@aws-cdk/aws-s3');
-import { Stack } from "@aws-cdk/core";
+import { countResources, expect, haveResourceLike, not } from '@aws-cdk/assert';
+import * as codebuild from '@aws-cdk/aws-codebuild';
+import * as codepipeline from '@aws-cdk/aws-codepipeline';
+import * as s3 from '@aws-cdk/aws-s3';
+import { Lazy, Stack } from '@aws-cdk/core';
 import { Test } from 'nodeunit';
-import cpactions = require('../../lib');
+import * as cpactions from '../../lib';
 
-// tslint:disable:object-literal-key-quotes
+/* eslint-disable quote-props */
 
 export = {
   'S3 Source Action': {
@@ -16,11 +16,11 @@ export = {
       minimalPipeline(stack, undefined);
 
       expect(stack).to(haveResourceLike('AWS::CodePipeline::Pipeline', {
-        "Stages": [
+        'Stages': [
           {
-            "Actions": [
+            'Actions': [
               {
-                "Configuration": {
+                'Configuration': {
                 },
               },
             ],
@@ -40,12 +40,12 @@ export = {
       minimalPipeline(stack, { trigger: cpactions.S3Trigger.EVENTS });
 
       expect(stack).to(haveResourceLike('AWS::CodePipeline::Pipeline', {
-        "Stages": [
+        'Stages': [
           {
-            "Actions": [
+            'Actions': [
               {
-                "Configuration": {
-                  "PollForSourceChanges": false,
+                'Configuration': {
+                  'PollForSourceChanges': false,
                 },
               },
             ],
@@ -65,12 +65,12 @@ export = {
       minimalPipeline(stack, { trigger: cpactions.S3Trigger.POLL });
 
       expect(stack).to(haveResourceLike('AWS::CodePipeline::Pipeline', {
-        "Stages": [
+        'Stages': [
           {
-            "Actions": [
+            'Actions': [
               {
-                "Configuration": {
-                  "PollForSourceChanges": true,
+                'Configuration': {
+                  'PollForSourceChanges': true,
                 },
               },
             ],
@@ -90,12 +90,12 @@ export = {
       minimalPipeline(stack, { trigger: cpactions.S3Trigger.NONE });
 
       expect(stack).to(haveResourceLike('AWS::CodePipeline::Pipeline', {
-        "Stages": [
+        'Stages': [
           {
-            "Actions": [
+            'Actions': [
               {
-                "Configuration": {
-                  "PollForSourceChanges": false,
+                'Configuration': {
+                  'PollForSourceChanges': false,
                 },
               },
             ],
@@ -172,6 +172,99 @@ export = {
       test.throws(() => {
         sourceStage.addAction(duplicateBucketAndPath);
       }, /S3 source action with path 'my\/other\/path' is already present in the pipeline for this source bucket/);
+
+      test.done();
+    },
+
+    'allows using a Token bucketKey with trigger = Events, multiple times'(test: Test) {
+      const stack = new Stack();
+
+      const bucket = new s3.Bucket(stack, 'MyBucket');
+      const sourceStage = minimalPipeline(stack, {
+        bucket,
+        bucketKey: Lazy.string({ produce: () => 'my-bucket-key1' }),
+        trigger: cpactions.S3Trigger.EVENTS,
+      });
+      sourceStage.addAction(new cpactions.S3SourceAction({
+        actionName: 'Source2',
+        bucket,
+        bucketKey: Lazy.string({ produce: () => 'my-bucket-key2' }),
+        trigger: cpactions.S3Trigger.EVENTS,
+        output: new codepipeline.Artifact(),
+      }));
+
+      expect(stack, /* skipValidation = */ true).to(haveResourceLike('AWS::CodePipeline::Pipeline', {
+        'Stages': [
+          {
+            'Actions': [
+              {
+                'Configuration': {
+                  'S3ObjectKey': 'my-bucket-key1',
+                },
+              },
+              {
+                'Configuration': {
+                  'S3ObjectKey': 'my-bucket-key2',
+                },
+              },
+            ],
+          },
+        ],
+      }));
+
+      test.done();
+    },
+
+    'exposes variables for other actions to consume'(test: Test) {
+      const stack = new Stack();
+
+      const sourceOutput = new codepipeline.Artifact();
+      const s3SourceAction = new cpactions.S3SourceAction({
+        actionName: 'Source',
+        output: sourceOutput,
+        bucket: new s3.Bucket(stack, 'Bucket'),
+        bucketKey: 'key.zip',
+      });
+      new codepipeline.Pipeline(stack, 'Pipeline', {
+        stages: [
+          {
+            stageName: 'Source',
+            actions: [s3SourceAction],
+          },
+          {
+            stageName: 'Build',
+            actions: [
+              new cpactions.CodeBuildAction({
+                actionName: 'Build',
+                project: new codebuild.PipelineProject(stack, 'MyProject'),
+                input: sourceOutput,
+                environmentVariables: {
+                  VersionId: { value: s3SourceAction.variables.versionId },
+                },
+              }),
+            ],
+          },
+        ],
+      });
+
+      expect(stack).to(haveResourceLike('AWS::CodePipeline::Pipeline', {
+        'Stages': [
+          {
+            'Name': 'Source',
+          },
+          {
+            'Name': 'Build',
+            'Actions': [
+              {
+                'Name': 'Build',
+                'Configuration': {
+                  'EnvironmentVariables': '[{"name":"VersionId","type":"PLAINTEXT","value":"#{Source_Source_NS.VersionId}"}]',
+                },
+              },
+            ],
+          },
+        ],
+      }));
 
       test.done();
     },

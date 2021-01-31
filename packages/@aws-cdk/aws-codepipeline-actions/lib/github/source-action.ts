@@ -1,4 +1,4 @@
-import codepipeline = require('@aws-cdk/aws-codepipeline');
+import * as codepipeline from '@aws-cdk/aws-codepipeline';
 import { Construct, SecretValue } from '@aws-cdk/core';
 import { Action } from '../action';
 import { sourceArtifactBounds } from '../common';
@@ -10,6 +10,26 @@ export enum GitHubTrigger {
   NONE = 'None',
   POLL = 'Poll',
   WEBHOOK = 'WebHook',
+}
+
+/**
+ * The CodePipeline variables emitted by GitHub source Action.
+ */
+export interface GitHubSourceVariables {
+  /** The name of the repository this action points to. */
+  readonly repositoryName: string;
+  /** The name of the branch this action tracks. */
+  readonly branchName: string;
+  /** The date the currently last commit on the tracked branch was authored, in ISO-8601 format. */
+  readonly authorDate: string;
+  /** The date the currently last commit on the tracked branch was committed, in ISO-8601 format. */
+  readonly committerDate: string;
+  /** The SHA1 hash of the currently last commit on the tracked branch. */
+  readonly commitId: string;
+  /** The message of the currently last commit on the tracked branch. */
+  readonly commitMessage: string;
+  /** The GitHub API URL of the currently last commit on the tracked branch. */
+  readonly commitUrl: string;
 }
 
 /**
@@ -45,6 +65,13 @@ export interface GitHubSourceActionProps extends codepipeline.CommonActionProps 
    *
    *   const oauth = cdk.SecretValue.secretsManager('my-github-token');
    *   new GitHubSource(this, 'GitHubAction', { oauthToken: oauth, ... });
+   *
+   * The GitHub Personal Access Token should have these scopes:
+   *
+   * * **repo** - to read the repository
+   * * **admin:repo_hook** - if you plan to use webhooks (true by default)
+   *
+   * @see https://docs.aws.amazon.com/codepipeline/latest/userguide/appendix-github-oauth.html#GitHub-create-personal-token-CLI
    */
   readonly oauthToken: SecretValue;
 
@@ -54,6 +81,9 @@ export interface GitHubSourceActionProps extends codepipeline.CommonActionProps 
    * With the default value "WEBHOOK", a webhook is created in GitHub that triggers the action
    * With "POLL", CodePipeline periodically checks the source for changes
    * With "None", the action is not triggered through changes in the source
+   *
+   * To use `WEBHOOK`, your GitHub Personal Access Token should have
+   * **admin:repo_hook** scope (in addition to the regular **repo** scope).
    *
    * @default GitHubTrigger.WEBHOOK
    */
@@ -79,8 +109,21 @@ export class GitHubSourceAction extends Action {
     this.props = props;
   }
 
+  /** The variables emitted by this action. */
+  public get variables(): GitHubSourceVariables {
+    return {
+      repositoryName: this.variableExpression('RepositoryName'),
+      branchName: this.variableExpression('BranchName'),
+      authorDate: this.variableExpression('AuthorDate'),
+      committerDate: this.variableExpression('CommitterDate'),
+      commitId: this.variableExpression('CommitId'),
+      commitMessage: this.variableExpression('CommitMessage'),
+      commitUrl: this.variableExpression('CommitUrl'),
+    };
+  }
+
   protected bound(scope: Construct, stage: codepipeline.IStage, _options: codepipeline.ActionBindOptions):
-      codepipeline.ActionConfig {
+  codepipeline.ActionConfig {
     if (!this.props.trigger || this.props.trigger === GitHubTrigger.WEBHOOK) {
       new codepipeline.CfnWebhook(scope, 'WebhookResource', {
         authentication: 'GITHUB_HMAC',
@@ -104,7 +147,7 @@ export class GitHubSourceAction extends Action {
       configuration: {
         Owner: this.props.owner,
         Repo: this.props.repo,
-        Branch: this.props.branch || "master",
+        Branch: this.props.branch || 'master',
         OAuthToken: this.props.oauthToken.toString(),
         PollForSourceChanges: this.props.trigger === GitHubTrigger.POLL,
       },

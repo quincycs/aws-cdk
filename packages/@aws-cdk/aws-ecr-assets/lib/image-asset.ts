@@ -1,16 +1,15 @@
-import assets = require('@aws-cdk/assets');
-import ecr = require('@aws-cdk/aws-ecr');
-import { Construct, Stack, Token } from '@aws-cdk/core';
-import fs = require('fs');
-import path = require('path');
-import { AdoptedRepository } from './adopted-repository';
+import * as fs from 'fs';
+import * as path from 'path';
+import * as assets from '@aws-cdk/assets';
+import * as ecr from '@aws-cdk/aws-ecr';
+import { Annotations, Construct as CoreConstruct, FeatureFlags, IgnoreMode, Stack, Token } from '@aws-cdk/core';
+import * as cxapi from '@aws-cdk/cx-api';
+import { Construct } from 'constructs';
 
-export interface DockerImageAssetProps extends assets.CopyOptions {
-  /**
-   * The directory where the Dockerfile is stored
-   */
-  readonly directory: string;
-
+/**
+ * Options for DockerImageAsset
+ */
+export interface DockerImageAssetOptions extends assets.FingerprintOptions {
   /**
    * ECR repository name
    *
@@ -18,7 +17,10 @@ export interface DockerImageAssetProps extends assets.CopyOptions {
    * from a Kubernetes Pod. Note, this is only the repository name, without the
    * registry and the tag parts.
    *
-   * @default - automatically derived from the asset's ID.
+   * @default - the default ECR repository for CDK assets
+   * @deprecated to control the location of docker image assets, please override
+   * `Stack.addDockerImageAsset`. this feature will be removed in future
+   * releases.
    */
   readonly repositoryName?: string;
 
@@ -39,6 +41,23 @@ export interface DockerImageAssetProps extends assets.CopyOptions {
    * @default - no target
    */
   readonly target?: string;
+
+  /**
+   * Path to the Dockerfile (relative to the directory).
+   *
+   * @default 'Dockerfile'
+   */
+  readonly file?: string;
+}
+
+/**
+ * Props for DockerImageAssets
+ */
+export interface DockerImageAssetProps extends DockerImageAssetOptions {
+  /**
+   * The directory where the Dockerfile is stored
+   */
+  readonly directory: string;
 }
 
 /**
@@ -46,7 +65,7 @@ export interface DockerImageAssetProps extends assets.CopyOptions {
  *
  * The image will be created in build time and uploaded to an ECR repository.
  */
-export class DockerImageAsset extends Construct implements assets.IAsset {
+export class DockerImageAsset extends CoreConstruct implements assets.IAsset {
   /**
    * The full URI of the image (including a tag). Use this reference to pull
    * the asset.
@@ -71,42 +90,76 @@ export class DockerImageAsset extends Construct implements assets.IAsset {
     if (!fs.existsSync(dir)) {
       throw new Error(`Cannot find image directory at ${dir}`);
     }
-    if (!fs.existsSync(path.join(dir, 'Dockerfile'))) {
-      throw new Error(`No 'Dockerfile' found in ${dir}`);
+
+    // validate the docker file exists
+    const file = path.join(dir, props.file || 'Dockerfile');
+    if (!fs.existsSync(file)) {
+      throw new Error(`Cannot find file at ${file}`);
     }
+
+    const defaultIgnoreMode = FeatureFlags.of(this).isEnabled(cxapi.DOCKER_IGNORE_SUPPORT)
+      ? IgnoreMode.DOCKER : IgnoreMode.GLOB;
+    let ignoreMode = props.ignoreMode ?? defaultIgnoreMode;
 
     let exclude: string[] = props.exclude || [];
 
     const ignore = path.join(dir, '.dockerignore');
 
     if (fs.existsSync(ignore)) {
-      exclude = [...exclude, ...fs.readFileSync(ignore).toString().split('\n').filter(e => !!e)];
+      const dockerIgnorePatterns = fs.readFileSync(ignore).toString().split('\n').filter(e => !!e);
+
+      exclude = [
+        ...dockerIgnorePatterns,
+        ...exclude,
+
+        // Ensure .dockerignore is whitelisted no matter what.
+        '!.dockerignore',
+      ];
     }
+
+    // Ensure the Dockerfile is whitelisted no matter what.
+    exclude.push('!' + path.basename(file));
+
+    if (props.repositoryName) {
+      Annotations.of(this).addWarning('DockerImageAsset.repositoryName is deprecated. Override "core.Stack.addDockerImageAsset" to control asset locations');
+    }
+
+    // include build context in "extra" so it will impact the hash
+    const extraHash: { [field: string]: any } = { };
+    if (props.extraHash) { extraHash.user = props.extraHash; }
+    if (props.buildArgs) { extraHash.buildArgs = props.buildArgs; }
+    if (props.target) { extraHash.target = props.target; }
+    if (props.file) { extraHash.file = props.file; }
+    if (props.repositoryName) { extraHash.repositoryName = props.repositoryName; }
+
+    // add "salt" to the hash in order to invalidate the image in the upgrade to
+    // 1.21.0 which removes the AdoptedRepository resource (and will cause the
+    // deletion of the ECR repository the app used).
+    extraHash.version = '1.21.0';
 
     const staging = new assets.Staging(this, 'Staging', {
       ...props,
       exclude,
-      sourcePath: dir
+      ignoreMode,
+      sourcePath: dir,
+      extraHash: Object.keys(extraHash).length === 0
+        ? undefined
+        : JSON.stringify(extraHash),
     });
 
     this.sourceHash = staging.sourceHash;
 
     const stack = Stack.of(this);
-    const location = stack.addDockerImageAsset({
-      directoryName: staging.stagedPath,
+    const location = stack.synthesizer.addDockerImageAsset({
+      directoryName: staging.relativeStagedPath(stack),
       dockerBuildArgs: props.buildArgs,
       dockerBuildTarget: props.target,
-      repositoryName: props.repositoryName || `cdk/${this.node.uniqueId.replace(/[:/]/g, '-').toLowerCase()}`,
-      sourceHash: staging.sourceHash
+      dockerFile: props.file,
+      repositoryName: props.repositoryName,
+      sourceHash: staging.sourceHash,
     });
 
-    // Require that repository adoption happens first, so we route the
-    // input ARN into the Custom Resource and then get the URI which we use to
-    // refer to the image FROM the Custom Resource.
-    //
-    // If adoption fails (because the repository might be twice-adopted), we
-    // haven't already started using the image.
-    this.repository = new AdoptedRepository(this, 'AdoptRepository', { repositoryName: location.repositoryName });
+    this.repository = ecr.Repository.fromRepositoryName(this, 'Repository', location.repositoryName);
     this.imageUri = location.imageUri;
   }
 }
@@ -124,7 +177,7 @@ function validateProps(props: DockerImageAssetProps) {
 function validateBuildArgs(buildArgs?: { [key: string]: string }) {
   for (const [key, value] of Object.entries(buildArgs || {})) {
     if (Token.isUnresolved(key) || Token.isUnresolved(value)) {
-      throw new Error(`Cannot use tokens in keys or values of "buildArgs" since they are needed before deployment`);
+      throw new Error('Cannot use tokens in keys or values of "buildArgs" since they are needed before deployment');
     }
   }
 }

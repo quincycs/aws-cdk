@@ -1,6 +1,6 @@
 {
   "name": "@aws-cdk/aws-eks",
-  "version": "1.18.0",
+  "version": "0.0.0",
   "description": "The CDK Construct Library for AWS::EKS",
   "main": "lib/index.js",
   "types": "lib/index.d.ts",
@@ -17,15 +17,18 @@
       "dotnet": {
         "namespace": "Amazon.CDK.AWS.EKS",
         "packageId": "Amazon.CDK.AWS.EKS",
-        "signAssembly": true,
-        "assemblyOriginatorKeyFile": "../../key.snk",
         "iconUrl": "https://raw.githubusercontent.com/aws/aws-cdk/master/logo/default-256-dark.png"
       },
       "python": {
         "distName": "aws-cdk.aws-eks",
-        "module": "aws_cdk.aws_eks"
+        "module": "aws_cdk.aws_eks",
+        "classifiers": [
+          "Framework :: AWS CDK",
+          "Framework :: AWS CDK :: 1"
+        ]
       }
-    }
+    },
+    "projectReferences": true
   },
   "repository": {
     "type": "git",
@@ -42,12 +45,17 @@
     "package": "cdk-package",
     "awslint": "cdk-awslint",
     "cfn2ts": "cfn2ts",
-    "build+test+package": "npm run build+test && npm run package",
-    "build+test": "npm run build && npm test",
-    "compat": "cdk-compat"
+    "build+test+package": "yarn build+test && yarn package",
+    "build+test": "yarn build && yarn test",
+    "compat": "cdk-compat",
+    "gen": "cfn2ts",
+    "rosetta:extract": "yarn --silent jsii-rosetta extract"
   },
   "cdk-build": {
-    "cloudformation": "AWS::EKS"
+    "cloudformation": "AWS::EKS",
+    "env": {
+      "AWSLINT_BASE_CONSTRUCT": true
+    }
   },
   "keywords": [
     "aws",
@@ -62,45 +70,62 @@
   },
   "license": "Apache-2.0",
   "devDependencies": {
-    "@aws-cdk/assert": "1.18.0",
-    "cdk-build-tools": "1.18.0",
-    "cdk-integ-tools": "1.18.0",
-    "cfn2ts": "1.18.0",
-    "pkglint": "1.18.0"
+    "@aws-cdk/assert": "0.0.0",
+    "@types/nodeunit": "^0.0.31",
+    "@types/yaml": "1.9.6",
+    "aws-sdk": "^2.830.0",
+    "cdk-build-tools": "0.0.0",
+    "cdk-integ-tools": "0.0.0",
+    "cfn2ts": "0.0.0",
+    "nodeunit": "^0.11.3",
+    "pkglint": "0.0.0",
+    "sinon": "^9.2.1",
+    "cdk8s-plus": "^0.33.0",
+    "cdk8s": "^0.33.0"
   },
   "dependencies": {
-    "@aws-cdk/aws-autoscaling": "1.18.0",
-    "@aws-cdk/aws-cloudformation": "1.18.0",
-    "@aws-cdk/aws-ec2": "1.18.0",
-    "@aws-cdk/aws-iam": "1.18.0",
-    "@aws-cdk/aws-lambda": "1.18.0",
-    "@aws-cdk/aws-ssm": "1.18.0",
-    "@aws-cdk/core": "1.18.0"
+    "@aws-cdk/aws-autoscaling": "0.0.0",
+    "@aws-cdk/aws-ec2": "0.0.0",
+    "@aws-cdk/aws-iam": "0.0.0",
+    "@aws-cdk/aws-kms": "0.0.0",
+    "@aws-cdk/aws-lambda": "0.0.0",
+    "@aws-cdk/aws-ssm": "0.0.0",
+    "@aws-cdk/core": "0.0.0",
+    "@aws-cdk/custom-resources": "0.0.0",
+    "@aws-cdk/lambda-layer-awscli": "0.0.0",
+    "@aws-cdk/lambda-layer-kubectl": "0.0.0",
+    "constructs": "^3.2.0",
+    "yaml": "1.10.0"
   },
+  "bundledDependencies": [
+    "yaml"
+  ],
   "homepage": "https://github.com/aws/aws-cdk",
   "peerDependencies": {
-    "@aws-cdk/aws-autoscaling": "1.18.0",
-    "@aws-cdk/aws-cloudformation": "1.18.0",
-    "@aws-cdk/aws-ec2": "1.18.0",
-    "@aws-cdk/aws-iam": "1.18.0",
-    "@aws-cdk/aws-lambda": "1.18.0",
-    "@aws-cdk/aws-ssm": "1.18.0",
-    "@aws-cdk/core": "1.18.0"
+    "@aws-cdk/aws-autoscaling": "0.0.0",
+    "@aws-cdk/aws-ec2": "0.0.0",
+    "@aws-cdk/aws-iam": "0.0.0",
+    "@aws-cdk/aws-kms": "0.0.0",
+    "@aws-cdk/aws-lambda": "0.0.0",
+    "@aws-cdk/aws-ssm": "0.0.0",
+    "@aws-cdk/core": "0.0.0",
+    "@aws-cdk/custom-resources": "0.0.0",
+    "constructs": "^3.2.0",
+    "@aws-cdk/lambda-layer-awscli": "0.0.0",
+    "@aws-cdk/lambda-layer-kubectl": "0.0.0"
   },
   "engines": {
-    "node": ">= 10.3.0"
+    "node": ">= 10.13.0 <13 || >=13.7.0"
   },
   "awslint": {
     "exclude": [
       "props-no-arn-refs:@aws-cdk/aws-eks.ClusterProps.outputMastersRoleArn",
-      "props-default-doc:@aws-cdk/aws-eks.AutoScalingGroupOptions.bootstrapOptions",
-      "resource-attribute:@aws-cdk/aws-eks.Cluster.clusterSecurityGroupId",
-      "docs-public-apis:@aws-cdk/aws-eks.AwsAuthProps",
-      "docs-public-apis:@aws-cdk/aws-eks.BootstrapOptions",
-      "docs-public-apis:@aws-cdk/aws-eks.ClusterAttributes",
-      "docs-public-apis:@aws-cdk/aws-eks.KubernetesResourceProps",
-      "docs-public-apis:@aws-cdk/aws-eks.Mapping"
+      "props-physical-name:@aws-cdk/aws-eks.OpenIdConnectProviderProps"
     ]
   },
-  "stability": "experimental"
+  "stability": "stable",
+  "maturity": "stable",
+  "awscdkio": {
+    "announce": false
+  }
 }
